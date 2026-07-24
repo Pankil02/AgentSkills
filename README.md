@@ -53,7 +53,7 @@ npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
 
 | Skill | Description | Key Features |
 | :--- | :--- | :--- |
-| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). | • Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
+| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). A polished, next-gen evolution of Google OKF & LLM Wiki architectures. | • Polished, superior evolution of Google OKF & LLM Wiki<br>• Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
 | [**`software-design-patterns`**](./software-design-patterns) | Pragmatic framework for selecting, applying, and reviewing software design patterns without overengineering. | • Problem-to-option decision mapping<br>• Zero-overengineering principle (no-pattern baseline)<br>• Language & framework agnostic guidance |
 
 ---
@@ -61,7 +61,7 @@ npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
 ## 📁 Skill Details
 
 ### 1. `project-memory`
-`project-memory` creates a durable, human-readable, and machine-parsable project wiki in `.memory/`. It prevents agents from losing context across sessions and ensures token-efficient persistence of project goals, progress, decisions, and history.
+`project-memory` is a polished, enterprise-grade evolution of **Google OKF (Open Knowledge Format)** and **LLM Wiki** concepts. It creates a durable, human-readable, and machine-parsable project wiki in `.memory/`, offering superior token efficiency, atomic write operations, and zero context drift across sessions.
 
 - **Supported Agents**: Google Antigravity, Pi Coding Agent, Kilo Code, Gemini, Claude Code
 - **Key Concepts**:
