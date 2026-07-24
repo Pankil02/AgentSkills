@@ -1,8 +1,51 @@
 # AgentSkills 🧠⚡
 
-A curated collection of specialized skills and extensions for AI coding agents (including Google Antigravity, Pi, Kilo Code, and Gemini). 
+A curated collection of specialized skills and extensions for AI coding agents (including **Google Antigravity**, **Pi**, **Claude Code**, **Kilo Code**, and **Gemini**).
 
-These skills empower AI agents with structured decision-making, durable project memory, and architectural design capabilities.
+---
+
+## ⚡ Direct 1-Command Installation (`npx` / `bunx` / `pnpm`)
+
+Anyone can directly install skills from this public repo into their agent's skills directory with a single terminal command:
+
+### 🎮 Interactive Mode
+Run the interactive installer to choose skills and target platform:
+```bash
+npx github:Pankil02/AgentSkills
+```
+*or with bun:*
+```bash
+bunx github:Pankil02/AgentSkills
+```
+
+---
+
+### 🚀 Direct 1-Liner Quick Commands
+
+#### Install All Skills to Google Antigravity / Gemini:
+```bash
+npx github:Pankil02/AgentSkills all --target antigravity
+```
+
+#### Install `project-memory` to Pi Agent:
+```bash
+npx github:Pankil02/AgentSkills project-memory --target pi
+```
+
+#### Install `software-design-patterns` to Claude Code:
+```bash
+npx github:Pankil02/AgentSkills software-design-patterns --target claude
+```
+
+#### Install to Current Project Workspace (`./.agents/skills`):
+```bash
+npx github:Pankil02/AgentSkills all --local
+```
+
+#### Install to a Custom Directory Path:
+```bash
+npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
+```
 
 ---
 
@@ -10,7 +53,7 @@ These skills empower AI agents with structured decision-making, durable project 
 
 | Skill | Description | Key Features |
 | :--- | :--- | :--- |
-| [**`project-memory`**](./project-memory) | Persistent linked Markdown project wiki for tracking project state, goals, decisions, and history. | • Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
+| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). | • Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
 | [**`software-design-patterns`**](./software-design-patterns) | Pragmatic framework for selecting, applying, and reviewing software design patterns without overengineering. | • Problem-to-option decision mapping<br>• Zero-overengineering principle (no-pattern baseline)<br>• Language & framework agnostic guidance |
 
 ---
@@ -38,16 +81,6 @@ These skills empower AI agents with structured decision-making, durable project 
   3. Establish a no-pattern / minimal baseline before introducing abstractions.
   4. Compare candidates and choose the minimum sufficient pattern.
   5. Apply incremental changes with verification.
-
----
-
-## 🚀 Installation & Usage
-
-Copy or link the desired skill directory (`project-memory` or `software-design-patterns`) into your agent's skills directory:
-
-- **Google Antigravity**: `~/.gemini/config/skills/`
-- **Pi Agent**: `~/.pi/skills/`
-- **Kilo Code / Custom Agents**: Configure path to skill directory.
 
 ---
 

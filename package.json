@@ -1,0 +1,31 @@
+{
+  "name": "@pankil/agent-skills",
+  "version": "1.0.0",
+  "description": "One-command CLI installer for AI Agent Skills (Google Antigravity, Pi, Claude Code, Kilo, Gemini)",
+  "type": "module",
+  "main": "bin/install.js",
+  "bin": {
+    "agent-skills": "./bin/install.js",
+    "install-skill": "./bin/install.js"
+  },
+  "scripts": {
+    "install-skills": "node bin/install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pankil02/AgentSkills.git"
+  },
+  "keywords": [
+    "agent-skills",
+    "antigravity",
+    "gemini",
+    "pi",
+    "claude-code",
+    "kilo-code",
+    "ai-agent",
+    "project-memory",
+    "software-design-patterns"
+  ],
+  "author": "Pankil",
+  "license": "MIT"
+}
