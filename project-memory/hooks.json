@@ -1,0 +1,44 @@
+{
+  "project-memory-context": {
+    "PreInvocation": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./scripts/antigravity-hook.mjs pre-invocation",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "project-memory-write-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content|run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./scripts/antigravity-hook.mjs pre-tool-use",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "project-memory-stale-reminder": {
+    "PostInvocation": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./scripts/antigravity-hook.mjs post-invocation",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

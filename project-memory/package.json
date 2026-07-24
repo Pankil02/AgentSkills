@@ -1,0 +1,72 @@
+{
+  "name": "project-memory",
+  "version": "0.1.0",
+  "description": "Persistent Markdown project wiki for Pi, Kilo Code, and Google Antigravity agents",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "agent-skill",
+    "project-memory",
+    "markdown-wiki",
+    "kilo-code",
+    "antigravity"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "memory": "./skills/memory/scripts/memory.mjs"
+  },
+  "files": [
+    "extensions/",
+    "hooks.json",
+    "plugin.json",
+    "rules/",
+    "scripts/",
+    "skills/",
+    "src/",
+    "workflows/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --alias:yaml=./node_modules/yaml/browser/index.js --outfile=skills/memory/scripts/memory.mjs --banner:js=\"#!/usr/bin/env node\" && chmod +x skills/memory/scripts/memory.mjs",
+    "install:antigravity": "node scripts/install-antigravity.mjs",
+    "install:kilo": "node scripts/install-kilo.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@types/node": "^24.10.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.21.0",
+    "typebox": "^1.0.0",
+    "typescript": "^5.9.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/memory.ts"
+    ],
+    "skills": [
+      "./skills/memory"
+    ]
+  }
+}
