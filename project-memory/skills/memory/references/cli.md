@@ -34,6 +34,8 @@ Candidates are evidence, not approved semantic scopes.
 
 ## `init` and `scaffold`
 
+Accepts optional `--scope <path>` flags and `--deep` flag for comprehensive deep codebase scanning during init.
+
 ```json
 {
   "root": "/absolute/project",

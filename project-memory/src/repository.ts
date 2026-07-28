@@ -132,6 +132,7 @@ export function assertSafeRelativePath(path: string): string {
 
 export function isSecretLike(path: string): boolean {
   const name = basename(path);
+  if (/^\.env\.(?:example|template|sample|schema)$/i.test(name)) return false;
   return SECRET_PATTERNS.some((pattern) => pattern.test(name));
 }
 
@@ -481,6 +482,303 @@ export function mapPathsToScopes(paths: string[], scopes: string[]): Record<stri
   return result;
 }
 
+export interface DeepScanPackage {
+  path: string;
+  name?: string;
+  description?: string;
+}
+
+export interface DeepScanResult {
+  scan: RepositoryScan;
+  techStack: {
+    languages: string[];
+    packageManager?: string;
+    buildSystem?: string;
+    frameworks: string[];
+    monorepo?: string;
+    testingTools: string[];
+  };
+  architecture: {
+    entryPoints: string[];
+    apiRoutes: string[];
+    databaseSchemas: string[];
+    domainTypes: string[];
+    uiComponents: string[];
+    packages: DeepScanPackage[];
+  };
+  environment: {
+    configFiles: string[];
+    envVariables: string[];
+    infrastructure: string[];
+  };
+  dependencies: {
+    main: string[];
+    dev: string[];
+  };
+}
+
+function isTestFilePath(path: string): boolean {
+  return /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[^.]+$/i.test(path);
+}
+
+export async function deepScanRepository(root: string, baseScan?: RepositoryScan): Promise<DeepScanResult> {
+  const scan = baseScan ?? await scanRepository(root);
+  const filePaths = scan.files.map((file) => file.path);
+  const pathSet = new Set(filePaths);
+
+  const languages = new Set<string>();
+  const frameworks = new Set<string>();
+  const testingTools = new Set<string>();
+  const configFiles = new Set<string>();
+  const infrastructure = new Set<string>();
+  const entryPoints = new Set<string>();
+  const apiRoutes = new Set<string>();
+  const databaseSchemas = new Set<string>();
+  const domainTypes = new Set<string>();
+  const uiComponents = new Set<string>();
+  const packages: DeepScanPackage[] = [];
+  const envVariables = new Set<string>();
+  const mainDeps = new Set<string>();
+  const devDeps = new Set<string>();
+
+  let packageManager: string | undefined;
+  let buildSystem: string | undefined;
+  let monorepo: string | undefined;
+
+  for (const file of scan.files) {
+    switch (file.extension) {
+      case ".ts":
+      case ".tsx":
+        languages.add("TypeScript");
+        break;
+      case ".js":
+      case ".jsx":
+      case ".mjs":
+      case ".cjs":
+        languages.add("JavaScript");
+        break;
+      case ".py":
+        languages.add("Python");
+        break;
+      case ".go":
+        languages.add("Go");
+        break;
+      case ".rs":
+        languages.add("Rust");
+        break;
+      case ".java":
+        languages.add("Java");
+        break;
+      case ".kt":
+      case ".kts":
+        languages.add("Kotlin");
+        break;
+      case ".rb":
+        languages.add("Ruby");
+        break;
+      case ".php":
+        languages.add("PHP");
+        break;
+      case ".swift":
+        languages.add("Swift");
+        break;
+      case ".ex":
+      case ".exs":
+        languages.add("Elixir");
+        break;
+      case ".c":
+      case ".cpp":
+      case ".cc":
+        languages.add("C/C++");
+        break;
+      case ".cs":
+        languages.add("C#");
+        break;
+    }
+  }
+
+  for (const path of filePaths) {
+    const base = basename(path).toLowerCase();
+    if (base === "tsconfig.json") configFiles.add(path);
+    else if (base === "turbo.json") {
+      configFiles.add(path);
+      monorepo = "Turborepo";
+      buildSystem = "Turbo";
+    } else if (base === "nx.json") {
+      configFiles.add(path);
+      monorepo = "Nx";
+    } else if (base === "lerna.json") {
+      configFiles.add(path);
+      monorepo = "Lerna";
+    } else if (base === "pnpm-workspace.yaml" || base === "pnpm-workspace.yml") {
+      configFiles.add(path);
+      if (!monorepo) monorepo = "pnpm Workspaces";
+      packageManager = "pnpm";
+    } else if (base === "biome.json") configFiles.add(path);
+    else if (base.startsWith(".eslintrc") || base === "eslint.config.js" || base === "eslint.config.mjs") configFiles.add(path);
+    else if (base === "dockerfile" || base.startsWith("docker-compose")) infrastructure.add(path);
+    else if (base === "fly.toml" || base === "render.yaml" || base === "vercel.json" || base === "netlify.toml" || base === "serverless.yml") infrastructure.add(path);
+    else if (path.startsWith(".github/workflows/")) infrastructure.add(path);
+
+    if (base === "pnpm-lock.yaml") packageManager = "pnpm";
+    else if (base === "yarn.lock") packageManager = "yarn";
+    else if (base === "package-lock.json") packageManager = "npm";
+    else if (base === "bun.lockb" || base === "bun.lock") packageManager = "bun";
+
+    if (/(?:^|\/)(?:index|main|app|server|cli|layout|page)\.(?:ts|tsx|js|jsx|py|go|rs)$/i.test(path)) {
+      if (!isTestFilePath(path)) entryPoints.add(path);
+    }
+
+    if (path.endsWith("schema.prisma") || path.includes("drizzle") || path.includes("/db/schema") || path.endsWith(".sql") || (path.includes("models/") && CODE_EXTENSIONS.has(extname(path)))) {
+      databaseSchemas.add(path);
+    }
+
+    if (/(?:^|\/)(?:api|routes|controllers|endpoints)\//i.test(path) && CODE_EXTENSIONS.has(extname(path)) && !isTestFilePath(path)) {
+      apiRoutes.add(path);
+    }
+
+    if (/(?:^|\/)(?:types|interfaces|schemas|dto)\//i.test(path) && CODE_EXTENSIONS.has(extname(path))) {
+      domainTypes.add(path);
+    }
+
+    if (/(?:^|\/)(?:components|ui|views)\//i.test(path) && CODE_EXTENSIONS.has(extname(path))) {
+      uiComponents.add(path);
+    }
+  }
+
+  const rootPackageJsonPath = resolve(scan.projectRoot, "package.json");
+  try {
+    const raw = await readFile(rootPackageJsonPath, "utf8");
+    const pkg = JSON.parse(raw);
+    if (pkg.workspaces && !monorepo) monorepo = "npm/yarn workspaces";
+    if (pkg.packageManager) packageManager = pkg.packageManager.split("@")[0];
+
+    const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    for (const dep of Object.keys(pkg.dependencies || {})) mainDeps.add(dep);
+    for (const dep of Object.keys(pkg.devDependencies || {})) devDeps.add(dep);
+
+    if (allDeps.next) frameworks.add("Next.js");
+    if (allDeps.react) frameworks.add("React");
+    if (allDeps.vue) frameworks.add("Vue");
+    if (allDeps.nuxt) frameworks.add("Nuxt");
+    if (allDeps.svelte || allDeps["@sveltejs/kit"]) frameworks.add("Svelte");
+    if (allDeps.express) frameworks.add("Express");
+    if (allDeps.fastify) frameworks.add("Fastify");
+    if (allDeps.nest || allDeps["@nestjs/core"]) frameworks.add("NestJS");
+    if (allDeps.hono) frameworks.add("Hono");
+    if (allDeps.astro) frameworks.add("Astro");
+    if (allDeps.remix || allDeps["@remix-run/react"]) frameworks.add("Remix");
+    if (allDeps.tailwindcss) frameworks.add("TailwindCSS");
+
+    if (allDeps.vitest) testingTools.add("Vitest");
+    if (allDeps.jest) testingTools.add("Jest");
+    if (allDeps.playwright || allDeps["@playwright/test"]) testingTools.add("Playwright");
+    if (allDeps.cypress) testingTools.add("Cypress");
+
+    if (allDeps.prisma || allDeps["@prisma/client"]) frameworks.add("Prisma");
+    if (allDeps["drizzle-orm"]) frameworks.add("Drizzle ORM");
+    if (allDeps.typeorm) frameworks.add("TypeORM");
+    if (allDeps.mongoose) frameworks.add("Mongoose");
+
+    if (allDeps.vite && !buildSystem) buildSystem = "Vite";
+    if (allDeps.esbuild && !buildSystem) buildSystem = "esbuild";
+    if (allDeps.webpack && !buildSystem) buildSystem = "Webpack";
+    if (allDeps.tsup && !buildSystem) buildSystem = "tsup";
+  } catch {
+    // Ignore missing package.json
+  }
+
+  if (pathSet.has("pyproject.toml") || pathSet.has("requirements.txt")) {
+    languages.add("Python");
+    for (const reqPath of ["pyproject.toml", "requirements.txt"]) {
+      try {
+        const text = await readFile(resolve(scan.projectRoot, reqPath), "utf8");
+        if (/django/i.test(text)) frameworks.add("Django");
+        if (/fastapi/i.test(text)) frameworks.add("FastAPI");
+        if (/flask/i.test(text)) frameworks.add("Flask");
+        if (/sqlalchemy/i.test(text)) frameworks.add("SQLAlchemy");
+        if (/pytest/i.test(text)) testingTools.add("PyTest");
+      } catch {
+        // Ignore read errors
+      }
+    }
+  }
+
+  for (const path of filePaths) {
+    if (path !== "package.json" && basename(path) === "package.json") {
+      const dir = dirname(path);
+      try {
+        const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
+        const pkg = JSON.parse(raw);
+        packages.push({
+          path: dir,
+          name: pkg.name || basename(dir),
+          description: pkg.description,
+        });
+      } catch {
+        packages.push({ path: dir, name: basename(dir) });
+      }
+    } else {
+      const dir = dirname(path);
+      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/")) {
+        const parts = dir.split("/");
+        if (parts.length >= 2) {
+          const pkgPath = parts.slice(0, 2).join("/");
+          if (!packages.some((p) => p.path === pkgPath)) {
+            packages.push({ path: pkgPath, name: basename(pkgPath) });
+          }
+        }
+      }
+    }
+  }
+
+  const envExampleCandidates = filePaths.filter((p) => /^\.env\.(?:example|template|sample|schema)$/i.test(basename(p)));
+  for (const envPath of envExampleCandidates) {
+    try {
+      const text = await readFile(resolve(scan.projectRoot, envPath), "utf8");
+      const lines = text.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith("#")) {
+          const match = /^([A-Z0-9_]+)\s*=/i.exec(trimmed);
+          if (match) envVariables.add(match[1]);
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  return {
+    scan,
+    techStack: {
+      languages: [...languages].sort(),
+      packageManager,
+      buildSystem,
+      frameworks: [...frameworks].sort(),
+      monorepo,
+      testingTools: [...testingTools].sort(),
+    },
+    architecture: {
+      entryPoints: [...entryPoints].sort(),
+      apiRoutes: [...apiRoutes].sort(),
+      databaseSchemas: [...databaseSchemas].sort(),
+      domainTypes: [...domainTypes].sort(),
+      uiComponents: [...uiComponents].sort(),
+      packages: packages.sort((a, b) => a.path.localeCompare(b.path)),
+    },
+    environment: {
+      configFiles: [...configFiles].sort(),
+      envVariables: [...envVariables].sort(),
+      infrastructure: [...infrastructure].sort(),
+    },
+    dependencies: {
+      main: [...mainDeps].sort(),
+      dev: [...devDeps].sort(),
+    },
+  };
+}
+
 export async function scanRepository(root: string): Promise<RepositoryScan> {
   const projectRoot = await findProjectRoot(root);
   const files = await inventoryRepository(projectRoot);
@@ -497,3 +795,4 @@ export async function scanRepository(root: string): Promise<RepositoryScan> {
     fingerprint: `sha256:${fingerprint}`,
   };
 }
+

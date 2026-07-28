@@ -46,6 +46,7 @@ test("Pi extension registers exact tools, commands, and lifecycle hooks", () => 
   projectMemory(api);
   assert.deepEqual(tools.sort(), ["memory_apply", "memory_ask"]);
   assert.deepEqual(commands.sort(), [
+    "memory-ingest",
     "memory-init",
     "memory-reflect",
     "memory-sync",

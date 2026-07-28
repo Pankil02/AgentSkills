@@ -325,33 +325,53 @@ export default function projectMemory(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("memory-init", {
-    description: "Initialize Project Memory and conduct project or feature interview",
+    description: "Initialize Project Memory (--deep for deep codebase scan) and conduct project or feature interview",
     getArgumentCompletions: scopeCompletions,
     handler: async (args, ctx) => {
       try {
         const root = await findProjectRoot(ctx.cwd);
+        const parts = parseScopes(args);
+        const deep = parts.includes("--deep");
+        const scopeParts = parts.filter((p) => p !== "--deep");
         const status = await getMemoryStatus(root).catch(() => ({ initialized: false }));
         if (!status.initialized) {
           const scan = await scanRepository(root);
-          let scopes = parseScopes(args);
-          if (scopes.length === 0 && ctx.hasUI) {
+          let scopes = scopeParts;
+          if (scopes.length === 0 && ctx.hasUI && !deep) {
             const suggestions = scan.candidates.filter((candidate) => candidate.confidence !== "low").map((candidate) => candidate.path).join(", ");
             const input = await ctx.ui.input("Tracked scopes (comma separated; blank for project only)", suggestions);
             if (input === undefined) return;
             scopes = parseScopes(input);
           }
-          const confirmed = !ctx.hasUI || await ctx.ui.confirm("Initialize Project Memory?", `Create .memory with ${scopes.length} tracked feature scope(s). No existing memory document will be overwritten.`);
+          const confirmed = !ctx.hasUI || await ctx.ui.confirm("Initialize Project Memory?", `Create .memory${deep ? " with deep codebase scan" : ""}. No existing memory document will be overwritten.`);
           if (!confirmed) return;
-          const result = await mutate(root, () => initializeBundle(root, scopes));
+          const result = await mutate(root, () => initializeBundle(root, scopes, { deep }));
           cachedScopes = result.scopes;
-          show(ctx, `Project Memory initialized. ${result.changes.filter((change) => change.action !== "skip").length} file(s) changed.`);
+          show(ctx, `Project Memory initialized (${deep ? "deep scan" : "standard"}). ${result.changes.filter((change) => change.action !== "skip").length} file(s) changed.`);
           if (!ctx.hasUI || await ctx.ui.confirm("Start project interview?", "Start an interactive Grill-Me style interview (one question at a time with recommendations across 3–4 rounds).")) {
             pi.sendUserMessage(`[Project Memory project interview]\nConduct an interactive Grill-Me style interview (3–4 rounds minimum) to establish the root project goal. Rules:\n1. Ask questions ONE AT A TIME using interactive tools (memory_ask or ask_question).\n2. For every question, inspect the repository first and provide a recommended option prefixed with '(Recommended)'.\n3. Walk down each branch of the design tree sequentially.\n4. Round 1 MUST ask: (a) Is this a new feature or add-on feature? (b) Create a new folder or use an existing folder? (c) What design patterns and architecture to use?\n5. Round 2 (5–10 clarifying follow-ups based on Round 1 answers) and Round 3+ (refinements) until intent is crystal clear.\n6. Record confirmed answers incrementally with memory_apply. Before moving to ready, present the final synthesis and obtain explicit approval.`);
           }
         } else {
-          const scope = args.trim() || ".";
+          const scope = scopeParts[0] || ".";
           pi.sendUserMessage(`[Project Memory ${scope === "." ? "project" : "feature"} interview]\nRead .memory/index.md and ${scope === "." ? ".memory/goal.md" : `.memory/${scope}/goal.md`}. Conduct an interactive Grill-Me style interview (3–4 rounds minimum). Rules:\n1. Ask questions ONE AT A TIME using interactive tools (memory_ask or ask_question).\n2. For every question, inspect the repository first and provide a recommended option prefixed with '(Recommended)'.\n3. Walk down each branch of the design tree sequentially.\n4. Round 1 MUST ask: (a) Is this a new feature or add-on feature? (b) Create a new folder or use an existing folder? (c) What design patterns and architecture to use?\n5. Round 2 (5–10 clarifying follow-ups) and Round 3+ (refinements) until intent is crystal clear.\n6. Record confirmed answers incrementally with memory_apply. Present a final synthesis and request explicit approval before moving to ready.`);
         }
+      } catch (error) {
+        show(ctx, (error as Error).message, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("memory-ingest", {
+    description: "Deep codebase scan & ingestion to initialize or update .memory as project brain",
+    getArgumentCompletions: scopeCompletions,
+    handler: async (args, ctx) => {
+      try {
+        const root = await findProjectRoot(ctx.cwd);
+        const scopes = parseScopes(args);
+        const result = await mutate(root, () => initializeBundle(root, scopes, { deep: true }));
+        cachedScopes = result.scopes;
+        show(ctx, `Project Memory deep codebase scan completed. ${result.changes.filter((c) => c.action !== "skip").length} file(s) updated/created.`);
+        pi.sendUserMessage(`[Project Memory deep ingestion]\nDeep codebase scan completed. Read .memory/goal.md and .memory/index.md to review auto-detected architecture, tech stack, domain models, database schemas, and API routes. Perform initial project onboarding interview if goal is still in draft state.`);
       } catch (error) {
         show(ctx, (error as Error).message, "error");
       }

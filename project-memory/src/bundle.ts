@@ -6,9 +6,11 @@ import { Document, isMap, parseDocument } from "yaml";
 import {
   assertSafeRelativePath,
   containsLikelySecret,
+  deepScanRepository,
   fingerprintSource,
   isExcludedPath,
   isPathInside,
+  type DeepScanResult,
   type RepositoryScan,
   repositoryHead,
 } from "./repository.ts";
@@ -474,10 +476,118 @@ function relativeChangePath(projectRoot: string, absolute: string): string {
   return normalizeSlash(relative(projectRoot, absolute));
 }
 
+function buildDeepGoalContent(scope: string, timestamp: string, initialContext: string | undefined, deepScan: DeepScanResult): string {
+  const title = titleFromPath(scope);
+  const tech = deepScan.techStack;
+  const arch = deepScan.architecture;
+  const env = deepScan.environment;
+
+  let body = `# Goal\n\n## Auto-Detected Architecture & Tech Stack\n\n`;
+
+  if (tech.languages.length > 0) body += `- **Languages:** ${tech.languages.join(", ")}\n`;
+  if (tech.frameworks.length > 0) body += `- **Frameworks & Libraries:** ${tech.frameworks.join(", ")}\n`;
+  if (tech.monorepo) body += `- **Monorepo Structure:** ${tech.monorepo}\n`;
+  if (tech.packageManager) body += `- **Package Manager:** ${tech.packageManager}\n`;
+  if (tech.buildSystem) body += `- **Build System:** ${tech.buildSystem}\n`;
+  if (tech.testingTools.length > 0) body += `- **Testing Stack:** ${tech.testingTools.join(", ")}\n`;
+
+  if (arch.packages.length > 0) {
+    body += `\n### Monorepo Packages & Features\n\n`;
+    for (const pkg of arch.packages) {
+      body += `- **\`${pkg.path}\`**: ${pkg.name || titleFromPath(pkg.path)}${pkg.description ? ` — ${pkg.description}` : ""}\n`;
+    }
+  }
+
+  if (arch.entryPoints.length > 0) {
+    body += `\n### Primary Entry Points\n\n`;
+    for (const ep of arch.entryPoints.slice(0, 10)) body += `- \`${ep}\`\n`;
+  }
+
+  if (arch.databaseSchemas.length > 0) {
+    body += `\n### Database Schemas & Models\n\n`;
+    for (const schema of arch.databaseSchemas.slice(0, 10)) body += `- \`${schema}\`\n`;
+  }
+
+  if (arch.apiRoutes.length > 0) {
+    body += `\n### Discovered API Surface\n\n`;
+    for (const route of arch.apiRoutes.slice(0, 15)) body += `- \`${route}\`\n`;
+  }
+
+  if (env.envVariables.length > 0) {
+    body += `\n### Required Environment Variables\n\n`;
+    for (const varName of env.envVariables.slice(0, 20)) body += `- \`${varName}\`\n`;
+  }
+
+  if (env.configFiles.length > 0 || env.infrastructure.length > 0) {
+    body += `\n### Tooling & Infrastructure Configurations\n\n`;
+    for (const config of [...env.configFiles, ...env.infrastructure].slice(0, 15)) body += `- \`${config}\`\n`;
+  }
+
+  body += `\n## Motivation\n\nDeep codebase ingestion scan performed during project initialization.\n\n## User & outcome\n\n## Success measures\n\n## Scope & non-goals\n\n## Confirmed wants\n\n## Must-not rules\n\n## Requirements\n\n## Acceptance criteria\n\nUse stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.\n\n## Constraints & dependencies\n`;
+
+  if (initialContext) {
+    body += `\n### Context from AGENTS.md\n\n${initialContext}\n`;
+  }
+
+  body += `\n## Decisions & reversals\n\n## Questions & unresolved\n\n## Interview coverage\n\n- **Decisions:** 0 / 10–20\n- **State:** pending\n\n## Citations`;
+
+  return serializeMarkdown({
+    type: "Goal",
+    title: `${title} goal`,
+    description: `Goal for project.`,
+    timestamp,
+    scope: ".",
+    status: "draft",
+    provenance: "observed",
+    uid: randomUUID(),
+  }, body);
+}
+
+function buildScopeDeepGoalContent(scope: string, timestamp: string, deepScan: DeepScanResult): string {
+  const title = titleFromPath(scope);
+  const scopeFiles = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`));
+  const entryPoints = deepScan.architecture.entryPoints.filter((e) => e.startsWith(`${scope}/`));
+  const apiRoutes = deepScan.architecture.apiRoutes.filter((r) => r.startsWith(`${scope}/`));
+  const schemas = deepScan.architecture.databaseSchemas.filter((s) => s.startsWith(`${scope}/`));
+
+  let body = `# Goal\n\n## Scope Summary\n\nAuto-scaffolded scope for \`${scope}\` (${scopeFiles.length} files).\n\n`;
+
+  if (entryPoints.length > 0) {
+    body += `### Entry Points\n\n`;
+    for (const ep of entryPoints) body += `- \`${ep}\`\n`;
+    body += `\n`;
+  }
+
+  if (apiRoutes.length > 0) {
+    body += `### API Routes\n\n`;
+    for (const route of apiRoutes) body += `- \`${route}\`\n`;
+    body += `\n`;
+  }
+
+  if (schemas.length > 0) {
+    body += `### Schemas & Models\n\n`;
+    for (const schema of schemas) body += `- \`${schema}\`\n`;
+    body += `\n`;
+  }
+
+  body += `## Motivation\n\nPending interview.\n\n## User & outcome\n\n## Success measures\n\n## Scope & non-goals\n\n## Confirmed wants\n\n## Must-not rules\n\n## Requirements\n\n## Acceptance criteria\n\nUse stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.\n\n## Constraints & dependencies\n\n## Decisions & reversals\n\n## Questions & unresolved\n\n## Interview coverage\n\n- **Decisions:** 0 / 10–15\n- **State:** pending\n\n## Citations`;
+
+  return serializeMarkdown({
+    type: "Goal",
+    title: `${title} goal`,
+    description: `Goal for ${scope}.`,
+    timestamp,
+    scope,
+    status: "draft",
+    provenance: "observed",
+    uid: randomUUID(),
+  }, body);
+}
+
 export async function initializeBundle(
   projectRoot: string,
   scopes: string[] = [],
-  options: { dryRun?: boolean; now?: Date; projectName?: string } = {},
+  options: { dryRun?: boolean; now?: Date; projectName?: string; deep?: boolean } = {},
 ): Promise<InitResult> {
   const root = resolve(projectRoot);
   const memoryRoot = bundlePath(root);
@@ -487,16 +597,35 @@ export async function initializeBundle(
   const head = await repositoryHead(root);
   await assertWritableBundleVersion(root, true);
   if (await readIfExists(join(bundlePath(root), "index.md")) !== undefined) await assertValidForMutation(root);
-  const normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+
+  const deepScan = options.deep ? await deepScanRepository(root) : undefined;
+  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+
+  if (options.deep && deepScan && scopes.length === 0) {
+    const autoCandidates = deepScan.scan.candidates
+      .filter((candidate) => candidate.confidence === "high" || candidate.confidence === "medium")
+      .map((candidate) => candidate.path);
+    const packageScopes = deepScan.architecture.packages.map((pkg) => pkg.path);
+    const discovered = [...new Set([...autoCandidates, ...packageScopes])]
+      .map(assertSafeRelativePath)
+      .filter((scope) => scope !== ".")
+      .sort();
+    normalizedScopes = [...new Set([...normalizedScopes, ...discovered])].sort();
+  }
+
   for (const scope of normalizedScopes) {
     await assertNoBundleParentSymlink(join(scopeDirectory(root, scope), "index.md"));
   }
   const unmanagedAgents = await readUnmanagedAgentsContent(root);
   const changes: FileChange[] = [];
 
+  const rootGoalContent = deepScan
+    ? buildDeepGoalContent(".", timestamp, unmanagedAgents, deepScan)
+    : goalTemplate(".", timestamp, unmanagedAgents);
+
   const rootFiles = new Map<string, string>([
     [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head)],
-    [join(memoryRoot, "goal.md"), goalTemplate(".", timestamp, unmanagedAgents)],
+    [join(memoryRoot, "goal.md"), rootGoalContent],
     [join(memoryRoot, "progress.md"), progressTemplate(".", timestamp)],
     [join(memoryRoot, "log.md"), logTemplate(".", date)],
     [join(memoryRoot, "sources", "index.md"), indexTemplate("Sources")],
@@ -510,8 +639,11 @@ export async function initializeBundle(
       changes.push({ ...(await plannedWrite(path, indexTemplate(titleFromPath(directory)), dryRun, false)), path: relativeChangePath(root, path) });
     }
     const directory = scopeDirectory(root, scope);
+    const scopeGoalContent = deepScan
+      ? buildScopeDeepGoalContent(scope, timestamp, deepScan)
+      : goalTemplate(scope, timestamp);
     const files = new Map<string, string>([
-      [join(directory, "goal.md"), goalTemplate(scope, timestamp)],
+      [join(directory, "goal.md"), scopeGoalContent],
       [join(directory, "progress.md"), progressTemplate(scope, timestamp)],
       [join(directory, "log.md"), logTemplate(scope, date)],
     ]);
@@ -519,7 +651,7 @@ export async function initializeBundle(
   }
 
   if (!dryRun) {
-    changes.push(...(await syncIndexes(root)).map((change) => ({ ...change, path: relativeChangePath(root, resolve(root, change.path)) })));
+    changes.push(...(await syncIndexes(root, deepScan?.scan)).map((change) => ({ ...change, path: relativeChangePath(root, resolve(root, change.path)) })));
     changes.push({ ...(await syncAgentsFile(root)), path: "AGENTS.md" });
   }
 
@@ -583,9 +715,7 @@ function sourceFileLines(projectRoot: string, indexPath: string, scope: string, 
   if (!scan || scope === "." || scope === "sources" || scope.startsWith("sources/")) return [];
   const direct = scan.files.filter((file) => normalizeSlash(dirname(file.path)) === scope && isTestFile(file.path) === tests);
   return direct.map((file) => {
-    const absoluteSource = resolve(projectRoot, file.path);
-    const target = normalizeSlash(relative(dirname(indexPath), absoluteSource));
-    return markdownEntry(basename(file.path), target.startsWith(".") ? target : `./${target}`, `${file.extension || "file"}, ${file.size} bytes`);
+    return markdownEntry(basename(file.path), `repo://${file.path}`, `${file.extension || "file"}, ${file.size} bytes`);
   });
 }
 

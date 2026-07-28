@@ -12,12 +12,16 @@ It is human-readable, Git-diffable, Obsidian-compatible, and portable between su
 ## Quick start
 
 ```sh
+# For a new project:
 memory init
+
+# For an existing mature codebase (deep codebase scan):
+memory init --deep
 memory status
 memory validate
 ```
 
-Then run `/memory-init` to conduct the interactive **Grill-Me style interview** (asks questions one-by-one with recommended defaults across 3–4 iterative rounds). Before later work, read `.memory/index.md`; after meaningful work, run `/memory-reflect` to update progress, evidence, history, and next actions.
+Then run `/memory-init` (or `/memory-ingest`) to conduct the interactive **Grill-Me style interview** (asks questions one-by-one with recommended defaults across 3–4 iterative rounds). Before later work, read `.memory/index.md`; after meaningful work, run `/memory-reflect` to update progress, evidence, history, and next actions.
 
 ## Install
 
@@ -27,7 +31,7 @@ Then run `/memory-init` to conduct the interactive **Grill-Me style interview** 
 pi install ./project-memory
 ```
 
-This installs the skill, Pi extension, `memory_ask` and `memory_apply` tools, and the 3 master slash commands (`/memory-init`, `/memory-sync`, `/memory-reflect`).
+This installs the skill, Pi extension, `memory_ask` and `memory_apply` tools, and the master slash commands (`/memory-init`, `/memory-ingest`, `/memory-sync`, `/memory-reflect`).
 
 ### Kilo Code
 
@@ -65,7 +69,7 @@ node skills/memory/scripts/memory.mjs --help
 | Command | What it does | Typical use |
 |---|---|---|
 | `memory scan --json` | Finds repository files and possible feature scopes | Before initialization |
-| `memory init [--scope path]` | Creates `.memory/` without overwriting existing documents | Start project memory |
+| `memory init [--deep] [--scope path]` | Creates `.memory/` without overwriting existing documents (`--deep` for deep codebase scan) | Start project memory or onboard mid-project |
 | `memory scaffold --scope path` | Adds an approved tracked scope | Add a feature area |
 | `memory status [--scope path]` | Shows lifecycle, blockers, source state, and next action | Resume work |
 | `memory record --source repo://path` | Registers an approved local source | Add requirements or evidence |
@@ -79,11 +83,12 @@ Use `--dry-run` to preview mutations. Use `memory sync --check` in CI; it exits 
 
 ## Agent workflows
 
-Minimalistic 3-command interface:
+Minimalistic command interface:
 
 | Workflow | Usage | Description |
 |---|---|---|
-| **`/memory-init [scope]`** | `/memory-init` or `/memory-init <scope>` | Initialize `.memory/` bundle & conduct interactive **Grill-Me style interview** (one question at a time with recommended defaults across 3–4 rounds). |
+| **`/memory-init [scope]`** | `/memory-init`, `/memory-init --deep`, or `/memory-init <scope>` | Initialize `.memory/` bundle & conduct interactive **Grill-Me style interview** (one question at a time with recommended defaults across 3–4 rounds). |
+| **`/memory-ingest [scope]`** | `/memory-ingest` or `/memory-ingest <scope>` | Deep codebase ingestion scan (packages, schemas, API routes, entry points) to populate `.memory/` as project brain. |
 | **`/memory-sync [source]`** | `/memory-sync`, `/memory-sync <path\|url>`, or `--fetch-remote` | Refresh fingerprints, generated indexes, `AGENTS.md`, validate bundle, report status, or register/integrate an approved source. |
 | **`/memory-reflect [scope]`** | `/memory-reflect`, `/memory-reflect <scope>`, or `complete` | Reflect on session work vs approved intent and update progress/evidence, or explicitly approve goal completion (`/memory-reflect complete`). |
 

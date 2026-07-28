@@ -60,15 +60,24 @@ If approval is absent, keep the item unresolved. Never convert silence into appr
 
 ## Initialize and discover scopes
 
-Run:
+For a new or mid-project codebase, run deep initialization:
 
 ```sh
-memory scan --json
-memory init --scope path/to/feature
+memory init --deep
+# or for specific feature scopes:
+memory init --deep --scope path/to/feature
 memory validate
 ```
 
-Initialization always creates the root `index.md`, `goal.md`, `progress.md`, and `log.md`, as well as `AGENTS.md` in the repository root if it does not exist. If an `AGENTS.md` file already exists in the repository root, `memory init` extracts its instructions and ingests them into the initial project memory documents (such as `.memory/goal.md`). A confirmed tracked scope receives the same four `.memory/` files. Intermediate mirrored directories receive only `index.md` unless another document is useful.
+Or trigger `/memory-ingest` in supported agent interfaces.
+
+`memory init --deep` performs a deep-dive scan of the codebase structure:
+- **Beyond AGENTS.md**: Scans directory tree, package manifests (`package.json`, `turbo.json`, `tsconfig.json`, `pyproject.toml`, etc.), framework routes, API handlers, database schemas/models (Prisma, Drizzle, SQLAlchemy, etc.), and feature folders.
+- **Auto-Populates `.memory/goal.md`**: Fills auto-detected tech stack, framework breakdown, database schemas, primary entry points, API surface, environment variable requirements (`.env.example`), and monorepo package boundaries.
+- **Tracked Scope Auto-Scaffolding**: Automatically scans candidates and scaffolds tracked scope memory files (`.memory/<scope_path>/goal.md`, `index.md`, `progress.md`) for identified core packages and feature directories.
+- **Safe & Non-Destructive**: Secrets, `.env`, `node_modules`, `dist`, `.next`, `.turbo`, and binary assets are strictly excluded. Custom user edits in existing `.memory/` documents are preserved.
+
+Standard init without `--deep` creates the skeleton `.memory/` structure relying on existing context files like `AGENTS.md`.
 
 Scope candidates are proposals, not facts. Confirm meaningful feature boundaries with the user before tracking them. Initialization must not overwrite existing memory documents.
 

@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   changedRepositoryPaths,
   createPinnedLookup,
+  deepScanRepository,
   fingerprintSource,
   inventoryRepository,
   isSecretLike,
@@ -123,3 +124,22 @@ test("changed path lookup remains safe outside Git", async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   assert.deepEqual(await changedRepositoryPaths(root), []);
 });
+
+test("deepScanRepository inspects codebase structure, manifests, and architecture", async (t) => {
+  const root = await fixtureProject();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "package.json"), JSON.stringify({
+    name: "test-app",
+    dependencies: { react: "^18.0.0", next: "^14.0.0" },
+    devDependencies: { vitest: "^1.0.0" },
+  }));
+  await writeFile(join(root, ".env.example"), "DATABASE_URL=postgresql://localhost:5432/db\nAPI_KEY=123\n");
+  const deep = await deepScanRepository(root);
+  assert.deepEqual(deep.techStack.languages.includes("TypeScript"), true);
+  assert.deepEqual(deep.techStack.frameworks.includes("Next.js"), true);
+  assert.deepEqual(deep.techStack.frameworks.includes("React"), true);
+  assert.deepEqual(deep.techStack.testingTools.includes("Vitest"), true);
+  assert.deepEqual(deep.environment.envVariables, ["API_KEY", "DATABASE_URL"]);
+  assert(deep.architecture.packages.some((pkg: { path: string }) => pkg.path === "apps/api"));
+});
+

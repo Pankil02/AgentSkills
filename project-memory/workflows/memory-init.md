@@ -4,9 +4,9 @@ Create the persistent `.memory/` wiki and conduct project or feature goal interv
 
 1. Activate the `project-memory` skill and read its initialization and interview rules.
 2. If `.memory/` is not initialized:
-   - Run `memory scan --json`. If `memory` is unavailable, run the skill's `scripts/memory.mjs` with Node 20 or newer.
+   - Run `memory scan --json`. If initializing a mature or mid-project codebase, use `memory init --deep` (or `/memory-ingest`) to execute a comprehensive scan of manifests, schemas, API routes, and entry points.
    - Show proposed tracked scopes and ask the user which feature scopes to track.
-   - Run `memory init` with approved `--scope` parameters. `AGENTS.md` is created or ingested automatically.
+   - Run `memory init [--deep]` with approved `--scope` parameters. `AGENTS.md` is created or ingested automatically.
 3. Conduct the interactive **Grill-Me style** (one question at a time, interactive UI, recommended defaults) multi-round (3–4 stage minimum) interview:
    - **Grill-Me Rules:** Ask questions ONE AT A TIME using interactive UI selection tools (`memory_ask` or `ask_question`). Provide a recommended option prefixed with `(Recommended)`. Walk down each branch of the design tree sequentially.
    - **Mandatory Round 1 Questions:**

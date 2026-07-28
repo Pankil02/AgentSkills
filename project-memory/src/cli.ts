@@ -41,9 +41,9 @@ const HELP = `Project Memory CLI
 Usage:
   memory <command> [options]
 
-Commands:
+  Commands:
   scan                 Inspect repository files and propose tracked scopes
-  init                 Create .memory and optional tracked scopes
+  init                 Create .memory and optional tracked scopes (--deep for deep scan)
   scaffold             Add one or more tracked scopes
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
@@ -55,6 +55,7 @@ Commands:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
+  --deep                Perform deep codebase ingestion scan during init
   --source <path|url>   Approved source; repeat for multiple sources
   --source-text <text>  Approved brief or conversation text (not stored raw)
   --source-text-file <path> Read approved text from a file
@@ -78,6 +79,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     options: {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
+      deep: { type: "boolean" },
       source: { type: "string", multiple: true },
       "source-text": { type: "string" },
       "source-text-file": { type: "string" },
@@ -183,8 +185,9 @@ export async function runCli(argv: string[], io: CliIO = {
       case "init":
       case "scaffold": {
         const requested = [...flags(args, "scope"), ...args.positional].filter(Boolean);
+        const deep = enabled(args, "deep");
         const scan = await scanRepository(root);
-        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename(root) });
+        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);
         result = { ...initialized, candidates: scan.candidates };
         break;

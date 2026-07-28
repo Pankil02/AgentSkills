@@ -13,3 +13,5 @@ When `.memory/index.md` exists in a workspace:
 9. Do not store secrets, raw prompts, or hidden reasoning. Do not automatically commit to Git.
 10. Run `memory validate` after structural updates and stop mutation on unsafe paths, malformed YAML, duplicate markers, or invalid lifecycle transitions.
 11. Keep all `.memory/` documents ultra-short, compact, concise, and token-efficient. Minimize text, lines, and boilerplate while preserving exact requirements, evidence, and links. Avoid long files or verbose explanations during creation, edits, appends, or mutations.
+12. On mid-project onboarding or initialization on an existing mature project, run `memory init --deep` or `/memory-ingest` to execute a comprehensive scan of entry points, package manifests, database schemas, and API routes to populate `.memory/` as a complete project brain.
+

@@ -456,3 +456,30 @@ test("validation rejects symbolic links inside the bundle", async (t) => {
   assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((diagnostic) => diagnostic.code === "symlink"));
 });
+
+test("initializeBundle with deep scan auto-scaffolds candidate scopes and populates goal architecture", async (t) => {
+  const root = await temporaryProject(true);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "package.json"), JSON.stringify({
+    name: "deep-app",
+    dependencies: { react: "^18.0.0", next: "^14.0.0" },
+  }));
+  await writeFile(join(root, ".env.example"), "DATABASE_URL=postgresql://localhost:5432/db\n");
+
+  const init = await initializeBundle(root, [], { deep: true });
+  assert(init.scopes.includes("apps/api/src/domains/user"));
+  assert(init.scopes.includes("apps/web/app/dashboard"));
+
+  const rootGoal = await readFile(join(root, ".memory", "goal.md"), "utf8");
+  assert.match(rootGoal, /Auto-Detected Architecture & Tech Stack/);
+  assert.match(rootGoal, /TypeScript/);
+  assert.match(rootGoal, /Next\.js/);
+  assert.match(rootGoal, /DATABASE_URL/);
+
+  const scopeGoal = await readFile(join(root, ".memory", "apps", "api", "src", "domains", "user", "goal.md"), "utf8");
+  assert.match(scopeGoal, /Auto-scaffolded scope for `apps\/api\/src\/domains\/user`/);
+
+  const validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+});
+
