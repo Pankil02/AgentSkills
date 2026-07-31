@@ -6274,6 +6274,7 @@ var execFileAsync = promisify(execFile);
 var EXCLUDED_DIRECTORIES = /* @__PURE__ */ new Set([
   ".git",
   ".memory",
+  ".agents",
   ".idea",
   ".vscode",
   ".svn",
@@ -6496,6 +6497,7 @@ function candidateDirectories(files) {
   const directCodeByDirectory = /* @__PURE__ */ new Map();
   const add = (path, reason, file) => {
     if (!path || path === "." || isExcludedPath(path)) return;
+    if (path.split("/").length > 5) return;
     const record = candidates.get(path) ?? { reasons: /* @__PURE__ */ new Set(), files: /* @__PURE__ */ new Set() };
     record.reasons.add(reason);
     record.files.add(file);
@@ -6523,7 +6525,7 @@ function candidateDirectories(files) {
 }
 function discoverScopeCandidates(files) {
   const candidates = candidateDirectories(files);
-  return [...candidates.entries()].map(([path, value]) => {
+  const rawList = [...candidates.entries()].map(([path, value]) => {
     const markerReason = [...value.reasons].some((reason) => reason.startsWith("Located under"));
     const fileCount = files.filter((file) => file.path === path || file.path.startsWith(`${path}/`)).length;
     return {
@@ -6533,6 +6535,17 @@ function discoverScopeCandidates(files) {
       reasons: [...value.reasons].sort()
     };
   }).filter((candidate) => candidate.fileCount > 0 && !isExcludedPath(candidate.path)).sort((a, b) => a.path.localeCompare(b.path));
+  const scopePaths = new Set(rawList.map((c) => c.path));
+  return rawList.filter((candidate) => {
+    const parts = candidate.path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      if (scopePaths.has(parent) && parent !== candidate.path && candidate.confidence !== "high") {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 async function assertNoSymlinkPath(root, target) {
   const rel = relative(root, target);
@@ -7066,11 +7079,22 @@ function getShortDescription(node, deepScan) {
 function generateTreemapContent(scan, deepScan) {
   const rootNode = buildTreeHierarchy(scan.files);
   const lines = ["```", "."];
-  function renderChildren(node, indent) {
+  function renderChildren(node, indent, depth = 0) {
     const children = [...node.children.values()].sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+    if (depth >= 4 && children.length > 3) {
+      const keyItems = children.slice(0, 2);
+      const remaining = children.length - 2;
+      for (let i = 0; i < keyItems.length; i++) {
+        const item = keyItems[i];
+        const desc = getShortDescription(item, deepScan);
+        lines.push(`${indent}\u251C\u2500\u2500 ${item.name}${item.isDir ? "/" : ""}${desc ? ` # ${desc}` : ""}`);
+      }
+      lines.push(`${indent}\u2514\u2500\u2500 ... (${remaining} more items)`);
+      return;
+    }
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
       const isLast = i === children.length - 1;
@@ -7082,10 +7106,10 @@ function generateTreemapContent(scan, deepScan) {
         if (!child.children.size) continue;
         lines.push(`${indent}${prefix}${child.name}/${descComment}`);
         const subDirs = [...child.children.values()].filter((c) => c.isDir);
-        if (subDirs.length === 0 && child.children.size > 8) {
+        if (subDirs.length === 0 && child.children.size > 5) {
           const files = [...child.children.values()];
-          const keyFiles = files.slice(0, 5);
-          const remaining = files.length - 5;
+          const keyFiles = files.slice(0, 3);
+          const remaining = files.length - 3;
           for (let j = 0; j < keyFiles.length; j++) {
             const f = keyFiles[j];
             const fDesc = getShortDescription(f, deepScan);
@@ -7093,7 +7117,7 @@ function generateTreemapContent(scan, deepScan) {
           }
           lines.push(`${childIndent}\u2514\u2500\u2500 ... (${remaining} more files)`);
         } else {
-          renderChildren(child, childIndent);
+          renderChildren(child, childIndent, depth + 1);
         }
       } else {
         lines.push(`${indent}${prefix}${child.name}${descComment}`);
@@ -7887,7 +7911,10 @@ async function syncIndexes(projectRoot, scan, options = {}) {
           const goalPath = join2(scopeDirectory(root, trackedScope), "goal.md");
           const metadata = await documentMetadata(goalPath);
           const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
-          scopeLines.push(markdownEntry(trackedScope === "." ? "Project" : trackedScope, target, `${metadata.status ?? "unknown"} \u2014 ${metadata.description}`));
+          const label = trackedScope === "." ? "Project" : trackedScope;
+          const status = metadata.status ? `(${metadata.status})` : "";
+          const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` \u2014 ${metadata.description}` : "";
+          scopeLines.push(`- [${label}](${target}) ${status}${desc}`.trim());
         }
         content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
         const repoScan = scan ?? await scanRepository(root);

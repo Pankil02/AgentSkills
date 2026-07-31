@@ -1425,7 +1425,8 @@ const AGENTS_START = "<!-- memory:start -->";
 const AGENTS_END = "<!-- memory:end -->";
 const AGENTS_BLOCK = `${AGENTS_START}
 Project memory lives in \`.memory/\`. Keep all documents ultra-short, compact, concise, and token-efficient.
-Before work, read \`.memory/index.md\`, then the matching scope's goal and progress.
+Before any work in \`.memory/\`, check and read \`.memory/index.md\` (or root \`index.md\`), then the matching scope's goal and progress.
+Always keep \`index.md\` and \`AGENTS.md\` updated when project requirements, scope, or memory change.
 Treat user-confirmed wants, must-not rules, and acceptance criteria as requirements.
 Ask instead of guessing when intent is missing, inferred, stale, or contradictory.
 When a source changes, integrate it into the existing wiki instead of merely indexing it.

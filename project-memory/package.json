@@ -33,7 +33,9 @@
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --alias:yaml=./node_modules/yaml/browser/index.js --outfile=skills/memory/scripts/memory.mjs --banner:js=\"#!/usr/bin/env node\" && chmod +x skills/memory/scripts/memory.mjs",
     "install:antigravity": "node scripts/install-antigravity.mjs",
+    "install:antigravity:link": "node scripts/install-antigravity.mjs --link",
     "install:kilo": "node scripts/install-kilo.mjs",
+    "install:kilo:link": "node scripts/install-kilo.mjs --link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "check": "npm run typecheck && npm test && npm run build"

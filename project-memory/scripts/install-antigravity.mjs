@@ -1,29 +1,36 @@
 #!/usr/bin/env node
 
-import { access, cp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const targetRoot = resolve(process.argv[2] ?? process.cwd());
+
+const useSymlink = process.argv.includes("--link") || process.argv.includes("--symlink") || process.argv.includes("-l");
+const targetArg = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
+const targetRoot = resolve(targetArg ?? process.cwd());
 const agentsRoot = join(targetRoot, ".agents");
 const pluginRoot = join(agentsRoot, "plugins", "project-memory");
+const skillsRoot = join(agentsRoot, "skills", "project-memory");
+const globalSkillsRoot = join(homedir(), ".gemini", "config", "skills", "project-memory");
 const hooksPath = join(agentsRoot, "hooks.json");
-const names = ["init", "sync", "reflect"];
-const hookNames = ["project-memory-context", "project-memory-write-guard", "project-memory-stale-reminder"];
-const destinations = [
-  pluginRoot,
-  join(agentsRoot, "rules", "project-memory.md"),
-  ...names.map((name) => join(agentsRoot, "workflows", `memory-${name}.md`)),
-];
+const names = ["init", "ingest", "sync", "reflect"];
 
-for (const path of destinations) {
-  try {
-    await access(path);
-    throw new Error(`Refusing to replace existing Antigravity file: ${path}`);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
+async function linkOrCopy(source, target, isDir = false) {
+  await mkdir(dirname(target), { recursive: true });
+  await rm(target, { recursive: true, force: true });
+  if (useSymlink) {
+    try {
+      const symlinkType = isDir ? (process.platform === "win32" ? "junction" : "dir") : "file";
+      await symlink(source, target, symlinkType);
+      return "symlinked";
+    } catch {
+      // Fallback to copy if symlinking fails
+    }
   }
+  await cp(source, target, { recursive: isDir, force: true });
+  return "copied";
 }
 
 let existingHooks = {};
@@ -32,9 +39,6 @@ try {
   if (!existingHooks || Array.isArray(existingHooks) || typeof existingHooks !== "object") throw new Error("Antigravity hooks.json must contain an object");
 } catch (error) {
   if (error?.code !== "ENOENT") throw error;
-}
-for (const name of hookNames) {
-  if (Object.hasOwn(existingHooks, name)) throw new Error(`Refusing to replace existing Antigravity hook: ${name}`);
 }
 
 function shellQuote(value) {
@@ -57,17 +61,31 @@ const projectHooks = {
 
 await mkdir(join(pluginRoot, "scripts"), { recursive: true });
 await mkdir(join(pluginRoot, "skills"), { recursive: true });
+await mkdir(join(agentsRoot, "skills"), { recursive: true });
 await mkdir(join(agentsRoot, "rules"), { recursive: true });
 await mkdir(join(agentsRoot, "workflows"), { recursive: true });
-await cp(join(packageRoot, "plugin.json"), join(pluginRoot, "plugin.json"), { errorOnExist: true, force: false });
-await cp(join(packageRoot, "skills", "memory"), join(pluginRoot, "skills", "memory"), { recursive: true, errorOnExist: true, force: false });
-await cp(join(packageRoot, "scripts", "antigravity-hook.mjs"), installedScript, { errorOnExist: true, force: false });
-await cp(join(packageRoot, "rules", "memory.md"), join(agentsRoot, "rules", "project-memory.md"), { errorOnExist: true, force: false });
+
+await linkOrCopy(join(packageRoot, "plugin.json"), join(pluginRoot, "plugin.json"), false);
+await linkOrCopy(join(packageRoot, "skills", "memory"), join(pluginRoot, "skills", "memory"), true);
+const skillMode = await linkOrCopy(join(packageRoot, "skills", "memory"), skillsRoot, true);
+await linkOrCopy(join(packageRoot, "scripts", "antigravity-hook.mjs"), installedScript, false);
+await linkOrCopy(join(packageRoot, "rules", "memory.md"), join(agentsRoot, "rules", "project-memory.md"), false);
+
 for (const name of names) {
-  await cp(join(packageRoot, "workflows", `memory-${name}.md`), join(agentsRoot, "workflows", `memory-${name}.md`), { errorOnExist: true, force: false });
+  await linkOrCopy(join(packageRoot, "workflows", `memory-${name}.md`), join(agentsRoot, "workflows", `memory-${name}.md`), false);
+}
+
+try {
+  await mkdir(dirname(globalSkillsRoot), { recursive: true });
+  const globalMode = await linkOrCopy(join(packageRoot, "skills", "memory"), globalSkillsRoot, true);
+  process.stdout.write(`Installed global Project Memory skill (${globalMode}) at ${globalSkillsRoot}\n`);
+} catch {
+  // Ignore error if global dir isn't accessible
 }
 
 const temporaryHooksPath = `${hooksPath}.${process.pid}.tmp`;
 await writeFile(temporaryHooksPath, `${JSON.stringify({ ...existingHooks, ...projectHooks }, null, 2)}\n`);
 await rename(temporaryHooksPath, hooksPath);
-process.stdout.write(`Installed Project Memory for Antigravity in ${agentsRoot}\n`);
+process.stdout.write(`Installed Project Memory for Antigravity (${useSymlink ? "symlinked" : "copied"}) in ${agentsRoot}\n`);
+
+

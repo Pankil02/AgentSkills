@@ -2,7 +2,7 @@
 
 When `.memory/index.md` exists in a workspace:
 
-1. Read `.memory/index.md` before broad project exploration, then read only the relevant linked goal, progress, topic/entity, source, and history pages.
+1. Always inspect and read `.memory/index.md` (or root `index.md`) before any work in `.memory/` or broad project exploration, and keep `.memory/index.md` and root `AGENTS.md` continuously updated when project rules, requirements, or scope change.
 2. Treat approved wants, must-not rules, non-goals, corrections, and acceptance criteria as requirements.
 3. Ask rather than guess when intent is missing, inferred, stale, or contradictory.
 4. Use the Project Memory skill and deterministic `memory` CLI for `.memory/` changes. Do not directly rewrite generated regions or `log.md`.
