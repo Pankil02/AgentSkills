@@ -284,7 +284,7 @@ function candidateDirectories(files: RepositoryFile[]): Map<string, { reasons: S
 
   const add = (path: string, reason: string, file: string) => {
     if (!path || path === "." || isExcludedPath(path)) return;
-    if (path.split("/").length > 4) return;
+    if (path.split("/").length > 5) return;
     const record = candidates.get(path) ?? { reasons: new Set<string>(), files: new Set<string>() };
     record.reasons.add(reason);
     record.files.add(file);
