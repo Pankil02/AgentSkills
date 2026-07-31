@@ -3,7 +3,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import readline from 'node:readline';
+import readline from 'node:readline/promises';
+import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,40 +23,11 @@ const TARGET_PRESETS = {
   local: { name: 'Current Workspace (.agents/skills)', path: path.join(process.cwd(), '.agents', 'skills') }
 };
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const flags = {};
-  const positional = [];
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
-        flags[key] = args[i + 1];
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positional.push(arg);
-    }
-  }
-
-  return { positional, flags };
-}
-
-function promptUser(query) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-  return new Promise((resolve) => {
-    rl.question(query, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+async function promptUser(query) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await rl.question(query);
+  rl.close();
+  return answer.trim();
 }
 
 function installSkill(skillName, destDir) {
@@ -83,13 +55,26 @@ function installSkill(skillName, destDir) {
 async function main() {
   console.log(`\n🧠 AgentSkills Installer\n======================`);
 
-  const { positional, flags } = parseArgs();
+  const { positionals, values } = parseArgs({
+    args: process.argv.slice(2),
+    allowPositionals: true,
+    strict: false,
+    options: {
+      path: { type: 'string' },
+      target: { type: 'string' },
+      antigravity: { type: 'boolean' },
+      gemini: { type: 'boolean' },
+      pi: { type: 'boolean' },
+      claude: { type: 'boolean' },
+      local: { type: 'boolean' },
+    }
+  });
 
   let selectedSkills = [];
   let targetPath = null;
 
   // Determine skills to install
-  const requestedSkill = positional[0];
+  const requestedSkill = positionals[0];
   if (requestedSkill) {
     if (requestedSkill.toLowerCase() === 'all') {
       selectedSkills = AVAILABLE_SKILLS.map(s => s.name);
@@ -105,17 +90,17 @@ async function main() {
   }
 
   // Determine target directory
-  if (flags.path) {
-    targetPath = path.resolve(flags.path);
-  } else if (flags.target && TARGET_PRESETS[flags.target.toLowerCase()]) {
-    targetPath = TARGET_PRESETS[flags.target.toLowerCase()].path;
-  } else if (flags.antigravity || flags.gemini) {
+  if (values.path) {
+    targetPath = path.resolve(values.path);
+  } else if (values.target && TARGET_PRESETS[values.target.toLowerCase()]) {
+    targetPath = TARGET_PRESETS[values.target.toLowerCase()].path;
+  } else if (values.antigravity || values.gemini) {
     targetPath = TARGET_PRESETS.antigravity.path;
-  } else if (flags.pi) {
+  } else if (values.pi) {
     targetPath = TARGET_PRESETS.pi.path;
-  } else if (flags.claude) {
+  } else if (values.claude) {
     targetPath = TARGET_PRESETS.claude.path;
-  } else if (flags.local) {
+  } else if (values.local) {
     targetPath = TARGET_PRESETS.local.path;
   }
 

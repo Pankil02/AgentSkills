@@ -4,7 +4,7 @@ import { lookup } from "node:dns/promises";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { isIP, type LookupFunction } from "node:net";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -289,40 +289,31 @@ export async function readResponseLimited(response: IncomingMessage, limit: numb
   return Buffer.concat(chunks, bytes);
 }
 
+const privateBlocks = new BlockList();
+for (const [sub, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["127.0.0.0", 8], ["100.64.0.0", 10],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+  ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24],
+] as const) privateBlocks.addSubnet(sub, prefix, "ipv4");
+privateBlocks.addSubnet("224.0.0.0", 4, "ipv4");
+
+for (const [sub, prefix] of [
+  ["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
+] as const) privateBlocks.addSubnet(sub, prefix, "ipv6");
+
 function mappedIpv4Address(address: string): string | undefined {
   const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
   if (dotted) return dotted;
-  if (isIP(address) !== 6) return undefined;
-  const parse = (side: string): number[] => side ? side.split(":").flatMap((part) => {
-    if (!part.includes(".")) return [Number.parseInt(part, 16)];
-    const bytes = part.split(".").map(Number);
-    return [(bytes[0] << 8) | bytes[1], (bytes[2] << 8) | bytes[3]];
-  }) : [];
-  const [leftText, rightText = ""] = address.toLowerCase().split("::");
-  const left = parse(leftText);
-  const right = parse(rightText);
-  const groups = rightText || address.includes("::")
-    ? [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill(0), ...right]
-    : left;
-  if (groups.length !== 8 || groups.slice(0, 5).some(Boolean) || groups[5] !== 0xffff) return undefined;
-  return `${groups[6] >> 8}.${groups[6] & 255}.${groups[7] >> 8}.${groups[7] & 255}`;
+  return undefined;
 }
 
 function isPrivateAddress(input: string): boolean {
   const address = input.toLowerCase().replace(/^\[|\]$/g, "");
   const mapped = mappedIpv4Address(address);
   if (mapped) return isPrivateAddress(mapped);
-  if (isIP(address) === 4) {
-    const [a, b, c] = address.split(".").map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224
-      || (a === 100 && b >= 64 && b <= 127)
-      || (a === 169 && b === 254)
-      || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && ((b === 0 && [0, 2].includes(c)) || b === 168))
-      || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100)))
-      || (a === 203 && b === 0 && c === 113);
-  }
-  if (isIP(address) === 6) return address === "::" || address === "::1" || /^(?:fc|fd|fe[89ab]|ff)/.test(address);
+  const family = isIP(address);
+  if (family === 4) return privateBlocks.check(address, "ipv4");
+  if (family === 6) return privateBlocks.check(address, "ipv6");
   return true;
 }
 

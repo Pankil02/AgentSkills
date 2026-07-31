@@ -1,5 +1,6 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isPathInside } from "../src/repository.ts";
 
 const MAX_CONTEXT = 18_000;
 const EXCLUDED_DIRECTORIES = new Set([
@@ -28,14 +29,6 @@ interface KiloEvent {
   properties?: { file?: string };
 }
 
-function inside(parent: string, candidate: string): boolean {
-  const path = relative(resolve(parent), resolve(candidate));
-  return (
-    path === "" ||
-    (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path))
-  );
-}
-
 function excerpt(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const marker = "\n\n[...middle truncated...]\n\n";
@@ -47,7 +40,7 @@ function excerpt(text: string, limit: number): string {
 
 async function safeRead(path: string, memoryRoot: string): Promise<string> {
   const canonical = await realpath(path);
-  if (!inside(memoryRoot, canonical))
+  if (!isPathInside(memoryRoot, canonical))
     throw new Error("Memory path escaped the bundle");
   const info = await lstat(canonical);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 512 * 1024)
@@ -77,7 +70,7 @@ async function memoryContext(root: string): Promise<string | undefined> {
     const index = await safeRead(resolve(memoryRoot, "index.md"), memoryRoot);
     const scope = activeScope(index);
     const scopeRoot = scope === "." ? memoryRoot : resolve(memoryRoot, scope);
-    if (!inside(memoryRoot, scopeRoot)) return undefined;
+    if (!isPathInside(memoryRoot, scopeRoot)) return undefined;
     const [goal, progress] = await Promise.all([
       safeRead(resolve(scopeRoot, "goal.md"), memoryRoot),
       safeRead(resolve(scopeRoot, "progress.md"), memoryRoot),
@@ -102,7 +95,7 @@ export async function ProjectMemoryKiloPlugin({
       const file = event.properties?.file;
       if (!file) return;
       const absolute = isAbsolute(file) ? resolve(file) : resolve(root, file);
-      if (!inside(root, absolute)) return;
+      if (!isPathInside(root, absolute)) return;
       const path = relative(root, absolute).split(sep).join("/");
       if (
         !path ||

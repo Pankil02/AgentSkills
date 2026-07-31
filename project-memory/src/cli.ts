@@ -100,19 +100,9 @@ function parseArguments(argv: string[]): ParsedArguments {
   return { command: positionals[0], positional: positionals.slice(1), flags };
 }
 
-function flag(args: ParsedArguments, name: string): string | undefined {
-  const value = args.flags[name];
-  return Array.isArray(value) ? value.at(-1) : typeof value === "string" ? value : undefined;
-}
-
-function flags(args: ParsedArguments, name: string): string[] {
-  const value = args.flags[name];
-  return Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
-}
-
-function enabled(args: ParsedArguments, name: string): boolean {
-  return args.flags[name] === true;
-}
+const flag = (args: ParsedArguments, name: string) => typeof args.flags[name] === "string" ? args.flags[name] as string : Array.isArray(args.flags[name]) ? (args.flags[name] as string[]).at(-1) : undefined;
+const flags = (args: ParsedArguments, name: string) => Array.isArray(args.flags[name]) ? args.flags[name] as string[] : typeof args.flags[name] === "string" ? [args.flags[name] as string] : [];
+const enabled = (args: ParsedArguments, name: string) => args.flags[name] === true;
 
 function summarize(value: unknown): string {
   if (!value || typeof value !== "object") return String(value);
