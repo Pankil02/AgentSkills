@@ -17,7 +17,7 @@ Use the LLM to maintain meaning and synthesis. Use the deterministic `memory` CL
 4. Use the wiki before broad repository exploration. Scan the repository only when discovery, drift analysis, or implementation evidence requires it.
 5. If memory is missing, stale, contradictory, or incomplete, say so and ask rather than inventing intent.
 
-In Pi, read the linked wiki with normal read tools, use `memory_ask` for batches of up to five focused user questions, and use `memory_apply` for every `.memory/` mutation. In other hosts, run `memory --help`; if the binary is unavailable, run this skill's `scripts/memory.mjs` with Node 20 or newer.
+In Pi, read the linked wiki with normal read tools, use `memory_ask` for batches of up to five focused user questions, and use `memory_apply` for every `.memory/` mutation. In other hosts, run `memory --help` or `memory status --toon`; if the binary is unavailable, run this skill's `scripts/memory.mjs` with Node 20 or newer. Pass `--toon` to any command for ultra-compact Token-Oriented Object Notation output.
 
 ## Core rules
 

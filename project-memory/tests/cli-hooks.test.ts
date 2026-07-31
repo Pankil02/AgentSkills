@@ -52,6 +52,9 @@ test("CLI initializes, validates, reports status, and supports plan files", asyn
   assert.equal(JSON.parse(output.pop()!).ok, true);
   assert.equal(await runCli(["status", "--root", root, "--json"], io), 0, errors.join("\n"));
   assert.equal(JSON.parse(output.pop()!).initialized, true);
+  assert.equal(await runCli(["status", "--root", root, "--toon"], io), 0, errors.join("\n"));
+  const toonStatus = output.pop()!;
+  assert.match(toonStatus, /^init:true\|root:/);
   assert.equal(await runCli(["sync", "--root", root, "--json"], io), 0, errors.join("\n"));
   output.pop();
   assert.equal(await runCli(["sync", "--check", "--root", root, "--json"], io), 0, errors.join("\n"));

@@ -69,6 +69,7 @@ Common options:
   --dry-run             Show changes without writing
   --check               Check whether sync would change files
   --fetch-remote        Refresh URL sources during sync
+  --toon                Emit compact Token-Oriented Object Notation (TOON) for AI agents
   --json                Emit JSON
   --help                Show this help
 `;
@@ -93,6 +94,7 @@ function parseArguments(argv: string[]): ParsedArguments {
       "dry-run": { type: "boolean" },
       check: { type: "boolean" },
       "fetch-remote": { type: "boolean" },
+      toon: { type: "boolean" },
       json: { type: "boolean" },
       help: { type: "boolean" },
     },
@@ -103,6 +105,55 @@ function parseArguments(argv: string[]): ParsedArguments {
 const flag = (args: ParsedArguments, name: string) => typeof args.flags[name] === "string" ? args.flags[name] as string : Array.isArray(args.flags[name]) ? (args.flags[name] as string[]).at(-1) : undefined;
 const flags = (args: ParsedArguments, name: string) => Array.isArray(args.flags[name]) ? args.flags[name] as string[] : typeof args.flags[name] === "string" ? [args.flags[name] as string] : [];
 const enabled = (args: ParsedArguments, name: string) => args.flags[name] === true;
+
+export function formatToon(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+
+  const object = value as Record<string, unknown>;
+
+  if ("diagnostics" in object && "counts" in object) {
+    const counts = object.counts as Record<string, number>;
+    const diagnostics = (object.diagnostics ?? []) as Array<{ severity: string; path?: string; message: string }>;
+    const head = `ok:${object.ok}|docs:${counts.documents ?? 0}|scopes:${counts.scopes ?? 0}|sources:${counts.sources ?? 0}|errors:${counts.errors ?? 0}|warnings:${counts.warnings ?? 0}`;
+    if (diagnostics.length === 0) return `${head}\ndiagnostics:none`;
+    const diagLines = diagnostics.slice(0, 30).map((d) => `  ${d.severity}|${d.path ?? "bundle"}|${d.message}`);
+    return `${head}\ndiagnostics[severity|path|message]:\n${diagLines.join("\n")}`;
+  }
+
+  if ("candidates" in object && "files" in object) {
+    const filesCount = Array.isArray(object.files) ? object.files.length : 0;
+    const candidates = (object.candidates ?? []) as Array<{ path: string; fileCount: number; confidence: string }>;
+    const head = `root:${object.projectRoot}|git:${object.git}|files:${filesCount}|fingerprint:${object.fingerprint}`;
+    if (candidates.length === 0) return `${head}\ncandidates:none`;
+    const rows = candidates.map((c) => `  ${c.path}|${c.confidence}|${c.fileCount}`);
+    return `${head}\ncandidates[path|confidence|files]:\n${rows.join("\n")}`;
+  }
+
+  if ("initialized" in object && "sourceCounts" in object) {
+    const sc = (object.sourceCounts ?? {}) as Record<string, number>;
+    const countsStr = Object.entries(sc).map(([k, v]) => `${k}:${v}`).join(" ");
+    const val = object.validation as { ok: boolean; counts?: { errors: number; warnings: number } };
+    const valStr = val ? `ok:${val.ok}(err:${val.counts?.errors ?? 0},warn:${val.counts?.warnings ?? 0})` : "none";
+    const lines = [
+      `init:${object.initialized}|root:${object.root}${object.activeScope ? `|scope:${object.activeScope}` : ""}`,
+      `goal:${object.goalStatus ?? "none"}${object.nextAction ? `|next:${object.nextAction}` : ""}`,
+      `sources:${countsStr}|val:${valStr}`,
+    ];
+    if (object.blockers) lines.push(`blockers:${object.blockers}`);
+    return lines.join("\n");
+  }
+
+  if ("changes" in object && Array.isArray(object.changes)) {
+    const changes = object.changes as Array<{ action: string; path: string }>;
+    if (changes.length === 0) return "changes:none";
+    return `changes[action|path]:\n${changes.map((c) => `  ${c.action}|${c.path}`).join("\n")}`;
+  }
+
+  return Object.entries(object)
+    .map(([k, v]) => (v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`))
+    .join(" | ");
+}
 
 function summarize(value: unknown): string {
   if (!value || typeof value !== "object") return String(value);
@@ -251,7 +302,8 @@ export async function runCli(argv: string[], io: CliIO = {
         return 2;
     }
 
-    io.stdout(json ? JSON.stringify(result, null, 2) : summarize(result));
+    const toon = enabled(args, "toon");
+    io.stdout(json ? JSON.stringify(result, null, 2) : toon ? formatToon(result) : summarize(result));
     if (args.command === "validate" && !(result as { ok: boolean }).ok) return 1;
     if (args.command === "sync" && enabled(args, "check")) {
       const syncResult = result as { changes?: Array<{ action: string }>; sources?: Array<{ changed: boolean; needsIntegration?: boolean }> };

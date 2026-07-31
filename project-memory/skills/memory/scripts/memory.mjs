@@ -6276,21 +6276,87 @@ var EXCLUDED_DIRECTORIES = /* @__PURE__ */ new Set([
   ".memory",
   ".idea",
   ".vscode",
+  ".svn",
+  ".hg",
+  ".ds_store",
   ".next",
+  ".next-docs",
   ".nuxt",
   ".turbo",
+  ".svelte-kit",
+  ".astro",
   ".cache",
+  ".parcel-cache",
+  ".rollup.cache",
+  ".vite",
+  ".webpack",
+  ".rspack",
+  ".vercel",
+  ".netlify",
+  ".output",
+  ".yarn",
+  ".pnpm-store",
+  ".docusaurus",
+  ".storybook",
   "node_modules",
   "bower_components",
   "vendor",
   "dist",
   "build",
+  "out",
   "coverage",
   "target",
-  "out",
+  "config",
+  ".config",
+  "configs",
+  ".configs",
   "tmp",
   "temp",
-  "__pycache__"
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
+  ".nox",
+  ".venv",
+  "venv",
+  "env",
+  ".env",
+  "__pypackages__",
+  ".eggs",
+  "site-packages",
+  ".gradle",
+  ".m2",
+  ".mvn",
+  ".bloop",
+  ".metals",
+  ".sbt",
+  ".cargo",
+  "cmake-build-debug",
+  "cmake-build-release",
+  "obj",
+  "objs",
+  ".deps",
+  "bin",
+  ".vs",
+  ".ionide",
+  ".bundle",
+  ".phpunit.cache",
+  ".php-cs-fixer.cache",
+  "_build",
+  "deps",
+  ".build",
+  ".swiftpm",
+  "deriveddata",
+  "pods",
+  ".dart_tool",
+  ".pub-cache",
+  ".pub",
+  ".serverless",
+  ".aws-sam",
+  ".terraform",
+  ".terragrunt-cache",
+  "cdk.out"
 ]);
 var SECRET_PATTERNS = [
   /^\.(?:aws|gnupg|ssh)$/i,
@@ -6367,7 +6433,12 @@ function containsLikelySecret(content) {
 function isExcludedPath(path) {
   const normalized = normalizeRelative(path);
   const parts = normalized.split("/");
-  return parts.some((part) => EXCLUDED_DIRECTORIES.has(part) || isSecretLike(part)) || isSecretLike(normalized);
+  return parts.some((part) => {
+    const lower = part.toLowerCase();
+    if (EXCLUDED_DIRECTORIES.has(lower) || isSecretLike(lower)) return true;
+    if (lower.endsWith(".egg-info") || lower.endsWith("-docs") || lower.startsWith("cmake-build-") || lower.startsWith(".venv")) return true;
+    return false;
+  }) || isSecretLike(normalized);
 }
 async function git(root, args) {
   try {
@@ -6424,7 +6495,7 @@ function candidateDirectories(files) {
   const candidates = /* @__PURE__ */ new Map();
   const directCodeByDirectory = /* @__PURE__ */ new Map();
   const add = (path, reason, file) => {
-    if (!path || path === ".") return;
+    if (!path || path === "." || isExcludedPath(path)) return;
     const record = candidates.get(path) ?? { reasons: /* @__PURE__ */ new Set(), files: /* @__PURE__ */ new Set() };
     record.reasons.add(reason);
     record.files.add(file);
@@ -6461,7 +6532,7 @@ function discoverScopeCandidates(files) {
       confidence: markerReason && fileCount >= 2 ? "high" : fileCount >= 2 ? "medium" : "low",
       reasons: [...value.reasons].sort()
     };
-  }).filter((candidate) => candidate.fileCount > 0).sort((a, b) => a.path.localeCompare(b.path));
+  }).filter((candidate) => candidate.fileCount > 0 && !isExcludedPath(candidate.path)).sort((a, b) => a.path.localeCompare(b.path));
 }
 async function assertNoSymlinkPath(root, target) {
   const rel = relative(root, target);
@@ -6837,6 +6908,7 @@ async function deepScanRepository(root, baseScan) {
   for (const path of filePaths) {
     if (path !== "package.json" && basename(path) === "package.json") {
       const dir = dirname(path);
+      if (isExcludedPath(dir)) continue;
       try {
         const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
         const pkg = JSON.parse(raw);
@@ -6854,6 +6926,7 @@ async function deepScanRepository(root, baseScan) {
         const parts = dir.split("/");
         if (parts.length >= 2) {
           const pkgPath = parts.slice(0, 2).join("/");
+          if (isExcludedPath(pkgPath)) continue;
           if (!packages.some((p) => p.path === pkgPath)) {
             packages.push({ path: pkgPath, name: basename(pkgPath) });
           }
@@ -7665,11 +7738,11 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
   if (await readIfExists(join2(bundlePath(root), "index.md")) !== void 0) await assertValidForMutation(root);
   const isDeep = options.deep ?? true;
   const deepScan = isDeep ? await deepScanRepository(root) : void 0;
-  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "." && !isExcludedPath(scope)))].sort();
   if (isDeep && deepScan && scopes.length === 0) {
     const autoCandidates = deepScan.scan.candidates.filter((candidate) => candidate.confidence === "high" || candidate.confidence === "medium").map((candidate) => candidate.path);
     const packageScopes = deepScan.architecture.packages.map((pkg) => pkg.path);
-    const discovered = [.../* @__PURE__ */ new Set([...autoCandidates, ...packageScopes])].map(assertSafeRelativePath).filter((scope) => scope !== ".").sort();
+    const discovered = [.../* @__PURE__ */ new Set([...autoCandidates, ...packageScopes])].map(assertSafeRelativePath).filter((scope) => scope !== "." && !isExcludedPath(scope)).sort();
     normalizedScopes = [.../* @__PURE__ */ new Set([...normalizedScopes, ...discovered])].sort();
   }
   for (const scope of normalizedScopes) {
@@ -8660,6 +8733,7 @@ Common options:
   --dry-run             Show changes without writing
   --check               Check whether sync would change files
   --fetch-remote        Refresh URL sources during sync
+  --toon                Emit compact Token-Oriented Object Notation (TOON) for AI agents
   --json                Emit JSON
   --help                Show this help
 `;
@@ -8683,6 +8757,7 @@ function parseArguments(argv) {
       "dry-run": { type: "boolean" },
       check: { type: "boolean" },
       "fetch-remote": { type: "boolean" },
+      toon: { type: "boolean" },
       json: { type: "boolean" },
       help: { type: "boolean" }
     }
@@ -8692,6 +8767,53 @@ function parseArguments(argv) {
 var flag = (args, name) => typeof args.flags[name] === "string" ? args.flags[name] : Array.isArray(args.flags[name]) ? args.flags[name].at(-1) : void 0;
 var flags = (args, name) => Array.isArray(args.flags[name]) ? args.flags[name] : typeof args.flags[name] === "string" ? [args.flags[name]] : [];
 var enabled = (args, name) => args.flags[name] === true;
+function formatToon(value) {
+  if (value === null || value === void 0) return "";
+  if (typeof value !== "object") return String(value);
+  const object = value;
+  if ("diagnostics" in object && "counts" in object) {
+    const counts = object.counts;
+    const diagnostics = object.diagnostics ?? [];
+    const head = `ok:${object.ok}|docs:${counts.documents ?? 0}|scopes:${counts.scopes ?? 0}|sources:${counts.sources ?? 0}|errors:${counts.errors ?? 0}|warnings:${counts.warnings ?? 0}`;
+    if (diagnostics.length === 0) return `${head}
+diagnostics:none`;
+    const diagLines = diagnostics.slice(0, 30).map((d) => `  ${d.severity}|${d.path ?? "bundle"}|${d.message}`);
+    return `${head}
+diagnostics[severity|path|message]:
+${diagLines.join("\n")}`;
+  }
+  if ("candidates" in object && "files" in object) {
+    const filesCount = Array.isArray(object.files) ? object.files.length : 0;
+    const candidates = object.candidates ?? [];
+    const head = `root:${object.projectRoot}|git:${object.git}|files:${filesCount}|fingerprint:${object.fingerprint}`;
+    if (candidates.length === 0) return `${head}
+candidates:none`;
+    const rows = candidates.map((c) => `  ${c.path}|${c.confidence}|${c.fileCount}`);
+    return `${head}
+candidates[path|confidence|files]:
+${rows.join("\n")}`;
+  }
+  if ("initialized" in object && "sourceCounts" in object) {
+    const sc = object.sourceCounts ?? {};
+    const countsStr = Object.entries(sc).map(([k, v]) => `${k}:${v}`).join(" ");
+    const val = object.validation;
+    const valStr = val ? `ok:${val.ok}(err:${val.counts?.errors ?? 0},warn:${val.counts?.warnings ?? 0})` : "none";
+    const lines = [
+      `init:${object.initialized}|root:${object.root}${object.activeScope ? `|scope:${object.activeScope}` : ""}`,
+      `goal:${object.goalStatus ?? "none"}${object.nextAction ? `|next:${object.nextAction}` : ""}`,
+      `sources:${countsStr}|val:${valStr}`
+    ];
+    if (object.blockers) lines.push(`blockers:${object.blockers}`);
+    return lines.join("\n");
+  }
+  if ("changes" in object && Array.isArray(object.changes)) {
+    const changes = object.changes;
+    if (changes.length === 0) return "changes:none";
+    return `changes[action|path]:
+${changes.map((c) => `  ${c.action}|${c.path}`).join("\n")}`;
+  }
+  return Object.entries(object).map(([k, v]) => v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`).join(" | ");
+}
 function summarize(value) {
   if (!value || typeof value !== "object") return String(value);
   const object = value;
@@ -8836,7 +8958,8 @@ async function runCli(argv, io = {
 ${HELP}`);
         return 2;
     }
-    io.stdout(json ? JSON.stringify(result, null, 2) : summarize(result));
+    const toon = enabled(args, "toon");
+    io.stdout(json ? JSON.stringify(result, null, 2) : toon ? formatToon(result) : summarize(result));
     if (args.command === "validate" && !result.ok) return 1;
     if (args.command === "sync" && enabled(args, "check")) {
       const syncResult = result;
@@ -8851,5 +8974,6 @@ ${HELP}`);
 var isMain = process.argv[1] && (["memory", "memory.mjs"].includes(basename3(process.argv[1])) || import.meta.url === pathToFileURL(resolve3(process.argv[1])).href);
 if (isMain) process.exitCode = await runCli(process.argv.slice(2));
 export {
+  formatToon,
   runCli
 };

@@ -15,21 +15,87 @@ const EXCLUDED_DIRECTORIES = new Set([
   ".memory",
   ".idea",
   ".vscode",
+  ".svn",
+  ".hg",
+  ".ds_store",
   ".next",
+  ".next-docs",
   ".nuxt",
   ".turbo",
+  ".svelte-kit",
+  ".astro",
   ".cache",
+  ".parcel-cache",
+  ".rollup.cache",
+  ".vite",
+  ".webpack",
+  ".rspack",
+  ".vercel",
+  ".netlify",
+  ".output",
+  ".yarn",
+  ".pnpm-store",
+  ".docusaurus",
+  ".storybook",
   "node_modules",
   "bower_components",
   "vendor",
   "dist",
   "build",
+  "out",
   "coverage",
   "target",
-  "out",
+  "config",
+  ".config",
+  "configs",
+  ".configs",
   "tmp",
   "temp",
   "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
+  ".nox",
+  ".venv",
+  "venv",
+  "env",
+  ".env",
+  "__pypackages__",
+  ".eggs",
+  "site-packages",
+  ".gradle",
+  ".m2",
+  ".mvn",
+  ".bloop",
+  ".metals",
+  ".sbt",
+  ".cargo",
+  "cmake-build-debug",
+  "cmake-build-release",
+  "obj",
+  "objs",
+  ".deps",
+  "bin",
+  ".vs",
+  ".ionide",
+  ".bundle",
+  ".phpunit.cache",
+  ".php-cs-fixer.cache",
+  "_build",
+  "deps",
+  ".build",
+  ".swiftpm",
+  "deriveddata",
+  "pods",
+  ".dart_tool",
+  ".pub-cache",
+  ".pub",
+  ".serverless",
+  ".aws-sam",
+  ".terraform",
+  ".terragrunt-cache",
+  "cdk.out",
 ]);
 
 const SECRET_PATTERNS = [
@@ -144,7 +210,12 @@ export function containsLikelySecret(content: string | Buffer): boolean {
 export function isExcludedPath(path: string): boolean {
   const normalized = normalizeRelative(path);
   const parts = normalized.split("/");
-  return parts.some((part) => EXCLUDED_DIRECTORIES.has(part) || isSecretLike(part)) || isSecretLike(normalized);
+  return parts.some((part) => {
+    const lower = part.toLowerCase();
+    if (EXCLUDED_DIRECTORIES.has(lower) || isSecretLike(lower)) return true;
+    if (lower.endsWith(".egg-info") || lower.endsWith("-docs") || lower.startsWith("cmake-build-") || lower.startsWith(".venv")) return true;
+    return false;
+  }) || isSecretLike(normalized);
 }
 
 async function git(root: string, args: string[]): Promise<string | undefined> {
@@ -211,7 +282,7 @@ function candidateDirectories(files: RepositoryFile[]): Map<string, { reasons: S
   const directCodeByDirectory = new Map<string, string[]>();
 
   const add = (path: string, reason: string, file: string) => {
-    if (!path || path === ".") return;
+    if (!path || path === "." || isExcludedPath(path)) return;
     const record = candidates.get(path) ?? { reasons: new Set<string>(), files: new Set<string>() };
     record.reasons.add(reason);
     record.files.add(file);
@@ -255,7 +326,7 @@ export function discoverScopeCandidates(files: RepositoryFile[]): ScopeCandidate
         reasons: [...value.reasons].sort(),
       };
     })
-    .filter((candidate) => candidate.fileCount > 0)
+    .filter((candidate) => candidate.fileCount > 0 && !isExcludedPath(candidate.path))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -698,6 +769,7 @@ export async function deepScanRepository(root: string, baseScan?: RepositoryScan
   for (const path of filePaths) {
     if (path !== "package.json" && basename(path) === "package.json") {
       const dir = dirname(path);
+      if (isExcludedPath(dir)) continue;
       try {
         const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
         const pkg = JSON.parse(raw);
@@ -715,6 +787,7 @@ export async function deepScanRepository(root: string, baseScan?: RepositoryScan
         const parts = dir.split("/");
         if (parts.length >= 2) {
           const pkgPath = parts.slice(0, 2).join("/");
+          if (isExcludedPath(pkgPath)) continue;
           if (!packages.some((p) => p.path === pkgPath)) {
             packages.push({ path: pkgPath, name: basename(pkgPath) });
           }

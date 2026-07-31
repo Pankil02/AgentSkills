@@ -607,7 +607,7 @@ export async function initializeBundle(
 
   const isDeep = options.deep ?? true;
   const deepScan = isDeep ? await deepScanRepository(root) : undefined;
-  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "." && !isExcludedPath(scope)))].sort();
 
   if (isDeep && deepScan && scopes.length === 0) {
     const autoCandidates = deepScan.scan.candidates
@@ -616,7 +616,7 @@ export async function initializeBundle(
     const packageScopes = deepScan.architecture.packages.map((pkg) => pkg.path);
     const discovered = [...new Set([...autoCandidates, ...packageScopes])]
       .map(assertSafeRelativePath)
-      .filter((scope) => scope !== ".")
+      .filter((scope) => scope !== "." && !isExcludedPath(scope))
       .sort();
     normalizedScopes = [...new Set([...normalizedScopes, ...discovered])].sort();
   }
