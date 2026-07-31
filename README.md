@@ -53,7 +53,7 @@ npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
 
 | Skill | Description | Key Features |
 | :--- | :--- | :--- |
-| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). A polished, next-gen evolution of Google OKF & LLM Wiki architectures. | • Polished, superior evolution of Google OKF & LLM Wiki<br>• Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
+| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). A polished, next-gen evolution of Google OKF & LLM Wiki architectures. | • Polished, superior evolution of Google OKF & LLM Wiki<br>• Automatic codebase deep-scan & ingestion on `memory init`<br>• Short, token-efficient codebase treemap with 1-line notes in `index.md`<br>• Ultra token-efficient wiki structure in `.memory/`<br>• CLI tools & native extensions for Pi/Antigravity/Kilo<br>• Structured goals, decisions, progress, & audit trails |
 | [**`software-design-patterns`**](./software-design-patterns) | Pragmatic framework for selecting, applying, and reviewing software design patterns without overengineering. | • Problem-to-option decision mapping<br>• Zero-overengineering principle (no-pattern baseline)<br>• Language & framework agnostic guidance |
 
 ---
@@ -65,8 +65,8 @@ npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
 
 - **Supported Agents**: Google Antigravity, Pi Coding Agent, Kilo Code, Gemini, Claude Code
 - **Key Concepts**:
-  - `index.md`: Central discovery map for project memory.
-  - `goal.md`: Approved requirements, non-goals, and current intent.
+  - `index.md`: Central discovery map for project memory, including an automatic token-efficient codebase treemap.
+  - `goal.md`: Approved requirements, auto-ingested tech stack, non-goals, and current intent.
   - `progress.md`: Phase status, completed steps, and remaining tasks.
   - `log.md`: Append-only history of decisions, corrections, and milestones.
 

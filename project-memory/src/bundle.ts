@@ -8,11 +8,13 @@ import {
   containsLikelySecret,
   deepScanRepository,
   fingerprintSource,
+  generateTreemapContent,
   isExcludedPath,
   isPathInside,
   type DeepScanResult,
   type RepositoryScan,
   repositoryHead,
+  scanRepository,
 } from "./repository.ts";
 
 export const MEMORY_DIRECTORY = ".memory";
@@ -381,6 +383,11 @@ function rootIndexTemplate(projectName: string, timestamp: string, head?: string
 <!-- memory:generated:start scopes -->
 <!-- memory:generated:end scopes -->
 
+## Codebase structure
+
+<!-- memory:generated:start treemap -->
+<!-- memory:generated:end treemap -->
+
 ## Documents
 
 <!-- memory:generated:start documents -->
@@ -598,10 +605,11 @@ export async function initializeBundle(
   await assertWritableBundleVersion(root, true);
   if (await readIfExists(join(bundlePath(root), "index.md")) !== undefined) await assertValidForMutation(root);
 
-  const deepScan = options.deep ? await deepScanRepository(root) : undefined;
+  const isDeep = options.deep ?? true;
+  const deepScan = isDeep ? await deepScanRepository(root) : undefined;
   let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
 
-  if (options.deep && deepScan && scopes.length === 0) {
+  if (isDeep && deepScan && scopes.length === 0) {
     const autoCandidates = deepScan.scan.candidates
       .filter((candidate) => candidate.confidence === "high" || candidate.confidence === "medium")
       .map((candidate) => candidate.path);
@@ -651,8 +659,10 @@ export async function initializeBundle(
   }
 
   if (!dryRun) {
-    changes.push(...(await syncIndexes(root, deepScan?.scan)).map((change) => ({ ...change, path: relativeChangePath(root, resolve(root, change.path)) })));
-    changes.push({ ...(await syncAgentsFile(root)), path: "AGENTS.md" });
+    const agentsChange = await syncAgentsFile(root);
+    const freshScan = await scanRepository(root);
+    changes.push(...(await syncIndexes(root, freshScan, { dryRun, now: date })).map((change) => ({ ...change, path: relativeChangePath(root, resolve(root, change.path)) })));
+    changes.push({ ...agentsChange, path: "AGENTS.md" });
   }
 
   return { root, bundle: memoryRoot, scopes: tracked, changes };
@@ -733,7 +743,7 @@ export async function discoverTrackedScopes(projectRoot: string): Promise<string
   return [...directories].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b));
 }
 
-export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, options: { dryRun?: boolean } = {}): Promise<FileChange[]> {
+export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, options: { dryRun?: boolean; now?: Date } = {}): Promise<FileChange[]> {
   const root = resolve(projectRoot);
   const memoryRoot = bundlePath(root);
   const dryRun = options.dryRun ?? false;
@@ -761,7 +771,7 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
     const indexPath = join(directory, "index.md");
     let content = await readIfExists(indexPath);
     if (!content) content = directory === memoryRoot
-      ? rootIndexTemplate(basename(root), nowIso(), fallbackHead)
+      ? rootIndexTemplate(basename(root), nowIso(options.now), fallbackHead)
       : indexTemplate(titleFromPath(scope));
 
     if (directory === memoryRoot) {
@@ -782,6 +792,19 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
       }
       content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
 
+      const repoScan = scan ?? await scanRepository(root);
+      const deepScan = await deepScanRepository(root, repoScan);
+      const treemapContent = generateTreemapContent(repoScan, deepScan);
+
+      if (!content.includes("<!-- memory:generated:start treemap -->")) {
+        if (content.includes("## Documents")) {
+          content = content.replace("## Documents", "## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n\n## Documents");
+        } else {
+          content += "\n\n## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n";
+        }
+      }
+      content = replaceGeneratedRegion(content, "treemap", treemapContent);
+
       const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
       const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
         const metadata = await documentMetadata(file);
@@ -800,8 +823,8 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         content = updateMarkdownFrontmatter(content, {
           repository_head: scan.head ?? null,
           repository_fingerprint: scan.fingerprint,
-          last_scan_at: nowIso(),
-          timestamp: nowIso(),
+          last_scan_at: nowIso(options.now),
+          timestamp: nowIso(options.now),
         });
       }
     } else {

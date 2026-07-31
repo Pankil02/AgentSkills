@@ -43,7 +43,7 @@ Usage:
 
   Commands:
   scan                 Inspect repository files and propose tracked scopes
-  init                 Create .memory and optional tracked scopes (--deep for deep scan)
+  init                 Create .memory and optional tracked scopes (deep scan by default)
   scaffold             Add one or more tracked scopes
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
@@ -55,7 +55,8 @@ Usage:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
-  --deep                Perform deep codebase ingestion scan during init
+  --deep                Perform deep codebase ingestion scan during init (default)
+  --shallow             Perform skeleton init without deep codebase scan
   --source <path|url>   Approved source; repeat for multiple sources
   --source-text <text>  Approved brief or conversation text (not stored raw)
   --source-text-file <path> Read approved text from a file
@@ -185,7 +186,8 @@ export async function runCli(argv: string[], io: CliIO = {
       case "init":
       case "scaffold": {
         const requested = [...flags(args, "scope"), ...args.positional].filter(Boolean);
-        const deep = enabled(args, "deep");
+        const shallow = enabled(args, "shallow");
+        const deep = !shallow;
         const scan = await scanRepository(root);
         const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);

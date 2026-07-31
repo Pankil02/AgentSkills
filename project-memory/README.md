@@ -69,7 +69,7 @@ node skills/memory/scripts/memory.mjs --help
 | Command | What it does | Typical use |
 |---|---|---|
 | `memory scan --json` | Finds repository files and possible feature scopes | Before initialization |
-| `memory init [--deep] [--scope path]` | Creates `.memory/` without overwriting existing documents (`--deep` for deep codebase scan) | Start project memory or onboard mid-project |
+| `memory init [--scope path]` | Creates `.memory/` with deep codebase scan by default & treemap in `index.md` | Start project memory or onboard mid-project |
 | `memory scaffold --scope path` | Adds an approved tracked scope | Add a feature area |
 | `memory status [--scope path]` | Shows lifecycle, blockers, source state, and next action | Resume work |
 | `memory record --source repo://path` | Registers an approved local source | Add requirements or evidence |

@@ -796,3 +796,138 @@ export async function scanRepository(root: string): Promise<RepositoryScan> {
   };
 }
 
+export interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children: Map<string, TreeNode>;
+  fileCount: number;
+}
+
+function buildTreeHierarchy(files: RepositoryFile[]): TreeNode {
+  const rootNode: TreeNode = { name: ".", path: ".", isDir: true, children: new Map(), fileCount: 0 };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let current = rootNode;
+    current.fileCount++;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const subPath = parts.slice(0, i + 1).join("/");
+      if (!current.children.has(part)) {
+        current.children.set(part, {
+          name: part,
+          path: subPath,
+          isDir: !isLast,
+          children: new Map(),
+          fileCount: 0,
+        });
+      }
+      current = current.children.get(part)!;
+      current.fileCount++;
+      if (isLast) {
+        current.isDir = false;
+      }
+    }
+  }
+  return rootNode;
+}
+
+function getShortDescription(node: TreeNode, deepScan?: DeepScanResult): string | undefined {
+  const p = node.path;
+  const base = node.name.toLowerCase();
+
+  if (node.isDir) {
+    if (deepScan) {
+      const pkg = deepScan.architecture.packages.find((pkg) => pkg.path === p);
+      if (pkg?.description) return pkg.description;
+      if (pkg) return `${pkg.name || node.name} package`;
+    }
+    if (p === "src" || p === "lib") return "Source code root";
+    if (p.endsWith("/components") || p === "components" || p === "ui") return "UI components";
+    if (p.endsWith("/routes") || p === "routes" || p === "api" || p.endsWith("/controllers")) return "API routes & handlers";
+    if (p.endsWith("/db") || p === "db" || p.endsWith("/models") || p === "models") return "Database models & schemas";
+    if (p.endsWith("/types") || p === "types") return "TypeScript type definitions";
+    if (p.endsWith("/services") || p === "services") return "Business logic services";
+    if (p === "tests" || p === "test" || p === "__tests__" || p.endsWith("/tests")) return "Test suites";
+    if (p === "skills" || p.endsWith("/skills")) return "Agent skill modules";
+    if (p === "workflows" || p === ".github/workflows") return "CI/CD workflows";
+    if (p === "scripts") return "Build & tooling scripts";
+    if (p === "public" || p === "assets") return "Static assets";
+    if (p === "docs") return "Documentation";
+    return undefined;
+  }
+
+  if (base === "package.json") return "Project manifest & dependencies";
+  if (base === "tsconfig.json") return "TypeScript configuration";
+  if (base === "readme.md") return "Project documentation";
+  if (base === "agents.md") return "Agent instructions & guidelines";
+  if (base === "dockerfile" || base.startsWith("docker-compose")) return "Container configuration";
+  if (base === "turbo.json") return "Turborepo configuration";
+  if (base === "plugin.json" || base === "hooks.json") return "Plugin & hook definitions";
+  if (base === "license") return "License file";
+
+  if (deepScan) {
+    if (deepScan.architecture.entryPoints.includes(p)) return "Primary entry point";
+    if (deepScan.architecture.databaseSchemas.includes(p)) return "Database schema/model";
+    if (deepScan.architecture.apiRoutes.includes(p)) return "API route handler";
+    if (deepScan.architecture.uiComponents.includes(p)) return "UI component";
+    if (deepScan.architecture.domainTypes.includes(p)) return "Domain type definition";
+    if (deepScan.environment.configFiles.includes(p)) return "Configuration file";
+    if (deepScan.environment.infrastructure.includes(p)) return "Infrastructure file";
+  }
+
+  if (isTestFilePath(p)) return "Unit/Integration test";
+
+  return undefined;
+}
+
+export function generateTreemapContent(scan: RepositoryScan, deepScan?: DeepScanResult): string {
+  const rootNode = buildTreeHierarchy(scan.files);
+  const lines: string[] = ["```", "."];
+
+  function renderChildren(node: TreeNode, indent: string) {
+    const children = [...node.children.values()].sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const isLast = i === children.length - 1;
+      const prefix = isLast ? "└── " : "├── ";
+      const childIndent = indent + (isLast ? "    " : "│   ");
+
+      const desc = getShortDescription(child, deepScan);
+      const descComment = desc ? ` # ${desc}` : "";
+
+      if (child.isDir) {
+        if (!child.children.size) continue;
+        lines.push(`${indent}${prefix}${child.name}/${descComment}`);
+
+        const subDirs = [...child.children.values()].filter((c) => c.isDir);
+        if (subDirs.length === 0 && child.children.size > 8) {
+          const files = [...child.children.values()];
+          const keyFiles = files.slice(0, 5);
+          const remaining = files.length - 5;
+          for (let j = 0; j < keyFiles.length; j++) {
+            const f = keyFiles[j];
+            const fDesc = getShortDescription(f, deepScan);
+            lines.push(`${childIndent}├── ${f.name}${fDesc ? ` # ${fDesc}` : ""}`);
+          }
+          lines.push(`${childIndent}└── ... (${remaining} more files)`);
+        } else {
+          renderChildren(child, childIndent);
+        }
+      } else {
+        lines.push(`${indent}${prefix}${child.name}${descComment}`);
+      }
+    }
+  }
+
+  renderChildren(rootNode, "");
+  lines.push("```");
+  return lines.join("\n");
+}
+
+

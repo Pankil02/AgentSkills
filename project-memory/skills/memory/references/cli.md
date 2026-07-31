@@ -34,7 +34,7 @@ Candidates are evidence, not approved semantic scopes.
 
 ## `init` and `scaffold`
 
-Accepts optional `--scope <path>` flags and `--deep` flag for comprehensive deep codebase scanning during init.
+Performs deep codebase scanning by default (scaffolding tech stack and generating a token-efficient treemap in `.memory/index.md`). Accepts optional `--scope <path>` flags and `--shallow` flag for skeleton initialization without deep codebase scanning.
 
 ```json
 {

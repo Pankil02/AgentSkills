@@ -483,3 +483,15 @@ test("initializeBundle with deep scan auto-scaffolds candidate scopes and popula
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 });
 
+test("initializeBundle generates codebase treemap in root index.md by default", async (t) => {
+  const root = await temporaryProject(true);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root);
+  const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  assert.match(rootIndex, /## Codebase structure/);
+  assert.match(rootIndex, /<!-- memory:generated:start treemap -->/);
+  assert.match(rootIndex, /profile\.ts # API route handler/);
+  assert.match(rootIndex, /docs\/ # Documentation/);
+});
+
+

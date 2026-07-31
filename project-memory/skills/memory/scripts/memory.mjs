@@ -6357,6 +6357,7 @@ function assertSafeRelativePath(path) {
 }
 function isSecretLike(path) {
   const name = basename(path);
+  if (/^\.env\.(?:example|template|sample|schema)$/i.test(name)) return false;
   return SECRET_PATTERNS.some((pattern) => pattern.test(name));
 }
 function containsLikelySecret(content) {
@@ -6657,6 +6658,243 @@ function mapPathsToScopes(paths, scopes) {
   }
   return result;
 }
+function isTestFilePath(path) {
+  return /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[^.]+$/i.test(path);
+}
+async function deepScanRepository(root, baseScan) {
+  const scan = baseScan ?? await scanRepository(root);
+  const filePaths = scan.files.map((file) => file.path);
+  const pathSet = new Set(filePaths);
+  const languages = /* @__PURE__ */ new Set();
+  const frameworks = /* @__PURE__ */ new Set();
+  const testingTools = /* @__PURE__ */ new Set();
+  const configFiles = /* @__PURE__ */ new Set();
+  const infrastructure = /* @__PURE__ */ new Set();
+  const entryPoints = /* @__PURE__ */ new Set();
+  const apiRoutes = /* @__PURE__ */ new Set();
+  const databaseSchemas = /* @__PURE__ */ new Set();
+  const domainTypes = /* @__PURE__ */ new Set();
+  const uiComponents = /* @__PURE__ */ new Set();
+  const packages = [];
+  const envVariables = /* @__PURE__ */ new Set();
+  const mainDeps = /* @__PURE__ */ new Set();
+  const devDeps = /* @__PURE__ */ new Set();
+  let packageManager;
+  let buildSystem;
+  let monorepo;
+  for (const file of scan.files) {
+    switch (file.extension) {
+      case ".ts":
+      case ".tsx":
+        languages.add("TypeScript");
+        break;
+      case ".js":
+      case ".jsx":
+      case ".mjs":
+      case ".cjs":
+        languages.add("JavaScript");
+        break;
+      case ".py":
+        languages.add("Python");
+        break;
+      case ".go":
+        languages.add("Go");
+        break;
+      case ".rs":
+        languages.add("Rust");
+        break;
+      case ".java":
+        languages.add("Java");
+        break;
+      case ".kt":
+      case ".kts":
+        languages.add("Kotlin");
+        break;
+      case ".rb":
+        languages.add("Ruby");
+        break;
+      case ".php":
+        languages.add("PHP");
+        break;
+      case ".swift":
+        languages.add("Swift");
+        break;
+      case ".ex":
+      case ".exs":
+        languages.add("Elixir");
+        break;
+      case ".c":
+      case ".cpp":
+      case ".cc":
+        languages.add("C/C++");
+        break;
+      case ".cs":
+        languages.add("C#");
+        break;
+    }
+  }
+  for (const path of filePaths) {
+    const base = basename(path).toLowerCase();
+    if (base === "tsconfig.json") configFiles.add(path);
+    else if (base === "turbo.json") {
+      configFiles.add(path);
+      monorepo = "Turborepo";
+      buildSystem = "Turbo";
+    } else if (base === "nx.json") {
+      configFiles.add(path);
+      monorepo = "Nx";
+    } else if (base === "lerna.json") {
+      configFiles.add(path);
+      monorepo = "Lerna";
+    } else if (base === "pnpm-workspace.yaml" || base === "pnpm-workspace.yml") {
+      configFiles.add(path);
+      if (!monorepo) monorepo = "pnpm Workspaces";
+      packageManager = "pnpm";
+    } else if (base === "biome.json") configFiles.add(path);
+    else if (base.startsWith(".eslintrc") || base === "eslint.config.js" || base === "eslint.config.mjs") configFiles.add(path);
+    else if (base === "dockerfile" || base.startsWith("docker-compose")) infrastructure.add(path);
+    else if (base === "fly.toml" || base === "render.yaml" || base === "vercel.json" || base === "netlify.toml" || base === "serverless.yml") infrastructure.add(path);
+    else if (path.startsWith(".github/workflows/")) infrastructure.add(path);
+    if (base === "pnpm-lock.yaml") packageManager = "pnpm";
+    else if (base === "yarn.lock") packageManager = "yarn";
+    else if (base === "package-lock.json") packageManager = "npm";
+    else if (base === "bun.lockb" || base === "bun.lock") packageManager = "bun";
+    if (/(?:^|\/)(?:index|main|app|server|cli|layout|page)\.(?:ts|tsx|js|jsx|py|go|rs)$/i.test(path)) {
+      if (!isTestFilePath(path)) entryPoints.add(path);
+    }
+    if (path.endsWith("schema.prisma") || path.includes("drizzle") || path.includes("/db/schema") || path.endsWith(".sql") || path.includes("models/") && CODE_EXTENSIONS.has(extname(path))) {
+      databaseSchemas.add(path);
+    }
+    if (/(?:^|\/)(?:api|routes|controllers|endpoints)\//i.test(path) && CODE_EXTENSIONS.has(extname(path)) && !isTestFilePath(path)) {
+      apiRoutes.add(path);
+    }
+    if (/(?:^|\/)(?:types|interfaces|schemas|dto)\//i.test(path) && CODE_EXTENSIONS.has(extname(path))) {
+      domainTypes.add(path);
+    }
+    if (/(?:^|\/)(?:components|ui|views)\//i.test(path) && CODE_EXTENSIONS.has(extname(path))) {
+      uiComponents.add(path);
+    }
+  }
+  const rootPackageJsonPath = resolve(scan.projectRoot, "package.json");
+  try {
+    const raw = await readFile(rootPackageJsonPath, "utf8");
+    const pkg = JSON.parse(raw);
+    if (pkg.workspaces && !monorepo) monorepo = "npm/yarn workspaces";
+    if (pkg.packageManager) packageManager = pkg.packageManager.split("@")[0];
+    const allDeps = { ...pkg.dependencies || {}, ...pkg.devDependencies || {} };
+    for (const dep of Object.keys(pkg.dependencies || {})) mainDeps.add(dep);
+    for (const dep of Object.keys(pkg.devDependencies || {})) devDeps.add(dep);
+    if (allDeps.next) frameworks.add("Next.js");
+    if (allDeps.react) frameworks.add("React");
+    if (allDeps.vue) frameworks.add("Vue");
+    if (allDeps.nuxt) frameworks.add("Nuxt");
+    if (allDeps.svelte || allDeps["@sveltejs/kit"]) frameworks.add("Svelte");
+    if (allDeps.express) frameworks.add("Express");
+    if (allDeps.fastify) frameworks.add("Fastify");
+    if (allDeps.nest || allDeps["@nestjs/core"]) frameworks.add("NestJS");
+    if (allDeps.hono) frameworks.add("Hono");
+    if (allDeps.astro) frameworks.add("Astro");
+    if (allDeps.remix || allDeps["@remix-run/react"]) frameworks.add("Remix");
+    if (allDeps.tailwindcss) frameworks.add("TailwindCSS");
+    if (allDeps.vitest) testingTools.add("Vitest");
+    if (allDeps.jest) testingTools.add("Jest");
+    if (allDeps.playwright || allDeps["@playwright/test"]) testingTools.add("Playwright");
+    if (allDeps.cypress) testingTools.add("Cypress");
+    if (allDeps.prisma || allDeps["@prisma/client"]) frameworks.add("Prisma");
+    if (allDeps["drizzle-orm"]) frameworks.add("Drizzle ORM");
+    if (allDeps.typeorm) frameworks.add("TypeORM");
+    if (allDeps.mongoose) frameworks.add("Mongoose");
+    if (allDeps.vite && !buildSystem) buildSystem = "Vite";
+    if (allDeps.esbuild && !buildSystem) buildSystem = "esbuild";
+    if (allDeps.webpack && !buildSystem) buildSystem = "Webpack";
+    if (allDeps.tsup && !buildSystem) buildSystem = "tsup";
+  } catch {
+  }
+  if (pathSet.has("pyproject.toml") || pathSet.has("requirements.txt")) {
+    languages.add("Python");
+    for (const reqPath of ["pyproject.toml", "requirements.txt"]) {
+      try {
+        const text = await readFile(resolve(scan.projectRoot, reqPath), "utf8");
+        if (/django/i.test(text)) frameworks.add("Django");
+        if (/fastapi/i.test(text)) frameworks.add("FastAPI");
+        if (/flask/i.test(text)) frameworks.add("Flask");
+        if (/sqlalchemy/i.test(text)) frameworks.add("SQLAlchemy");
+        if (/pytest/i.test(text)) testingTools.add("PyTest");
+      } catch {
+      }
+    }
+  }
+  for (const path of filePaths) {
+    if (path !== "package.json" && basename(path) === "package.json") {
+      const dir = dirname(path);
+      try {
+        const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
+        const pkg = JSON.parse(raw);
+        packages.push({
+          path: dir,
+          name: pkg.name || basename(dir),
+          description: pkg.description
+        });
+      } catch {
+        packages.push({ path: dir, name: basename(dir) });
+      }
+    } else {
+      const dir = dirname(path);
+      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/")) {
+        const parts = dir.split("/");
+        if (parts.length >= 2) {
+          const pkgPath = parts.slice(0, 2).join("/");
+          if (!packages.some((p) => p.path === pkgPath)) {
+            packages.push({ path: pkgPath, name: basename(pkgPath) });
+          }
+        }
+      }
+    }
+  }
+  const envExampleCandidates = filePaths.filter((p) => /^\.env\.(?:example|template|sample|schema)$/i.test(basename(p)));
+  for (const envPath of envExampleCandidates) {
+    try {
+      const text = await readFile(resolve(scan.projectRoot, envPath), "utf8");
+      const lines = text.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && !trimmed.startsWith("#")) {
+          const match = /^([A-Z0-9_]+)\s*=/i.exec(trimmed);
+          if (match) envVariables.add(match[1]);
+        }
+      }
+    } catch {
+    }
+  }
+  return {
+    scan,
+    techStack: {
+      languages: [...languages].sort(),
+      packageManager,
+      buildSystem,
+      frameworks: [...frameworks].sort(),
+      monorepo,
+      testingTools: [...testingTools].sort()
+    },
+    architecture: {
+      entryPoints: [...entryPoints].sort(),
+      apiRoutes: [...apiRoutes].sort(),
+      databaseSchemas: [...databaseSchemas].sort(),
+      domainTypes: [...domainTypes].sort(),
+      uiComponents: [...uiComponents].sort(),
+      packages: packages.sort((a, b) => a.path.localeCompare(b.path))
+    },
+    environment: {
+      configFiles: [...configFiles].sort(),
+      envVariables: [...envVariables].sort(),
+      infrastructure: [...infrastructure].sort()
+    },
+    dependencies: {
+      main: [...mainDeps].sort(),
+      dev: [...devDeps].sort()
+    }
+  };
+}
 async function scanRepository(root) {
   const projectRoot = await findProjectRoot(root);
   const files = await inventoryRepository(projectRoot);
@@ -6670,6 +6908,118 @@ async function scanRepository(root) {
     candidates: discoverScopeCandidates(files),
     fingerprint: `sha256:${fingerprint}`
   };
+}
+function buildTreeHierarchy(files) {
+  const rootNode = { name: ".", path: ".", isDir: true, children: /* @__PURE__ */ new Map(), fileCount: 0 };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let current = rootNode;
+    current.fileCount++;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      const subPath = parts.slice(0, i + 1).join("/");
+      if (!current.children.has(part)) {
+        current.children.set(part, {
+          name: part,
+          path: subPath,
+          isDir: !isLast,
+          children: /* @__PURE__ */ new Map(),
+          fileCount: 0
+        });
+      }
+      current = current.children.get(part);
+      current.fileCount++;
+      if (isLast) {
+        current.isDir = false;
+      }
+    }
+  }
+  return rootNode;
+}
+function getShortDescription(node, deepScan) {
+  const p = node.path;
+  const base = node.name.toLowerCase();
+  if (node.isDir) {
+    if (deepScan) {
+      const pkg = deepScan.architecture.packages.find((pkg2) => pkg2.path === p);
+      if (pkg?.description) return pkg.description;
+      if (pkg) return `${pkg.name || node.name} package`;
+    }
+    if (p === "src" || p === "lib") return "Source code root";
+    if (p.endsWith("/components") || p === "components" || p === "ui") return "UI components";
+    if (p.endsWith("/routes") || p === "routes" || p === "api" || p.endsWith("/controllers")) return "API routes & handlers";
+    if (p.endsWith("/db") || p === "db" || p.endsWith("/models") || p === "models") return "Database models & schemas";
+    if (p.endsWith("/types") || p === "types") return "TypeScript type definitions";
+    if (p.endsWith("/services") || p === "services") return "Business logic services";
+    if (p === "tests" || p === "test" || p === "__tests__" || p.endsWith("/tests")) return "Test suites";
+    if (p === "skills" || p.endsWith("/skills")) return "Agent skill modules";
+    if (p === "workflows" || p === ".github/workflows") return "CI/CD workflows";
+    if (p === "scripts") return "Build & tooling scripts";
+    if (p === "public" || p === "assets") return "Static assets";
+    if (p === "docs") return "Documentation";
+    return void 0;
+  }
+  if (base === "package.json") return "Project manifest & dependencies";
+  if (base === "tsconfig.json") return "TypeScript configuration";
+  if (base === "readme.md") return "Project documentation";
+  if (base === "agents.md") return "Agent instructions & guidelines";
+  if (base === "dockerfile" || base.startsWith("docker-compose")) return "Container configuration";
+  if (base === "turbo.json") return "Turborepo configuration";
+  if (base === "plugin.json" || base === "hooks.json") return "Plugin & hook definitions";
+  if (base === "license") return "License file";
+  if (deepScan) {
+    if (deepScan.architecture.entryPoints.includes(p)) return "Primary entry point";
+    if (deepScan.architecture.databaseSchemas.includes(p)) return "Database schema/model";
+    if (deepScan.architecture.apiRoutes.includes(p)) return "API route handler";
+    if (deepScan.architecture.uiComponents.includes(p)) return "UI component";
+    if (deepScan.architecture.domainTypes.includes(p)) return "Domain type definition";
+    if (deepScan.environment.configFiles.includes(p)) return "Configuration file";
+    if (deepScan.environment.infrastructure.includes(p)) return "Infrastructure file";
+  }
+  if (isTestFilePath(p)) return "Unit/Integration test";
+  return void 0;
+}
+function generateTreemapContent(scan, deepScan) {
+  const rootNode = buildTreeHierarchy(scan.files);
+  const lines = ["```", "."];
+  function renderChildren(node, indent) {
+    const children = [...node.children.values()].sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const isLast = i === children.length - 1;
+      const prefix = isLast ? "\u2514\u2500\u2500 " : "\u251C\u2500\u2500 ";
+      const childIndent = indent + (isLast ? "    " : "\u2502   ");
+      const desc = getShortDescription(child, deepScan);
+      const descComment = desc ? ` # ${desc}` : "";
+      if (child.isDir) {
+        if (!child.children.size) continue;
+        lines.push(`${indent}${prefix}${child.name}/${descComment}`);
+        const subDirs = [...child.children.values()].filter((c) => c.isDir);
+        if (subDirs.length === 0 && child.children.size > 8) {
+          const files = [...child.children.values()];
+          const keyFiles = files.slice(0, 5);
+          const remaining = files.length - 5;
+          for (let j = 0; j < keyFiles.length; j++) {
+            const f = keyFiles[j];
+            const fDesc = getShortDescription(f, deepScan);
+            lines.push(`${childIndent}\u251C\u2500\u2500 ${f.name}${fDesc ? ` # ${fDesc}` : ""}`);
+          }
+          lines.push(`${childIndent}\u2514\u2500\u2500 ... (${remaining} more files)`);
+        } else {
+          renderChildren(child, childIndent);
+        }
+      } else {
+        lines.push(`${indent}${prefix}${child.name}${descComment}`);
+      }
+    }
+  }
+  renderChildren(rootNode, "");
+  lines.push("```");
+  return lines.join("\n");
 }
 
 // src/bundle.ts
@@ -6930,6 +7280,11 @@ function rootIndexTemplate(projectName, timestamp2, head) {
 <!-- memory:generated:start scopes -->
 <!-- memory:generated:end scopes -->
 
+## Codebase structure
+
+<!-- memory:generated:start treemap -->
+<!-- memory:generated:end treemap -->
+
 ## Documents
 
 <!-- memory:generated:start documents -->
@@ -7082,6 +7437,213 @@ function scopeDirectory(projectRoot, scope) {
 function relativeChangePath(projectRoot, absolute) {
   return normalizeSlash(relative2(projectRoot, absolute));
 }
+function buildDeepGoalContent(scope, timestamp2, initialContext, deepScan) {
+  const title = titleFromPath(scope);
+  const tech = deepScan.techStack;
+  const arch = deepScan.architecture;
+  const env = deepScan.environment;
+  let body = `# Goal
+
+## Auto-Detected Architecture & Tech Stack
+
+`;
+  if (tech.languages.length > 0) body += `- **Languages:** ${tech.languages.join(", ")}
+`;
+  if (tech.frameworks.length > 0) body += `- **Frameworks & Libraries:** ${tech.frameworks.join(", ")}
+`;
+  if (tech.monorepo) body += `- **Monorepo Structure:** ${tech.monorepo}
+`;
+  if (tech.packageManager) body += `- **Package Manager:** ${tech.packageManager}
+`;
+  if (tech.buildSystem) body += `- **Build System:** ${tech.buildSystem}
+`;
+  if (tech.testingTools.length > 0) body += `- **Testing Stack:** ${tech.testingTools.join(", ")}
+`;
+  if (arch.packages.length > 0) {
+    body += `
+### Monorepo Packages & Features
+
+`;
+    for (const pkg of arch.packages) {
+      body += `- **\`${pkg.path}\`**: ${pkg.name || titleFromPath(pkg.path)}${pkg.description ? ` \u2014 ${pkg.description}` : ""}
+`;
+    }
+  }
+  if (arch.entryPoints.length > 0) {
+    body += `
+### Primary Entry Points
+
+`;
+    for (const ep of arch.entryPoints.slice(0, 10)) body += `- \`${ep}\`
+`;
+  }
+  if (arch.databaseSchemas.length > 0) {
+    body += `
+### Database Schemas & Models
+
+`;
+    for (const schema4 of arch.databaseSchemas.slice(0, 10)) body += `- \`${schema4}\`
+`;
+  }
+  if (arch.apiRoutes.length > 0) {
+    body += `
+### Discovered API Surface
+
+`;
+    for (const route of arch.apiRoutes.slice(0, 15)) body += `- \`${route}\`
+`;
+  }
+  if (env.envVariables.length > 0) {
+    body += `
+### Required Environment Variables
+
+`;
+    for (const varName of env.envVariables.slice(0, 20)) body += `- \`${varName}\`
+`;
+  }
+  if (env.configFiles.length > 0 || env.infrastructure.length > 0) {
+    body += `
+### Tooling & Infrastructure Configurations
+
+`;
+    for (const config of [...env.configFiles, ...env.infrastructure].slice(0, 15)) body += `- \`${config}\`
+`;
+  }
+  body += `
+## Motivation
+
+Deep codebase ingestion scan performed during project initialization.
+
+## User & outcome
+
+## Success measures
+
+## Scope & non-goals
+
+## Confirmed wants
+
+## Must-not rules
+
+## Requirements
+
+## Acceptance criteria
+
+Use stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.
+
+## Constraints & dependencies
+`;
+  if (initialContext) {
+    body += `
+### Context from AGENTS.md
+
+${initialContext}
+`;
+  }
+  body += `
+## Decisions & reversals
+
+## Questions & unresolved
+
+## Interview coverage
+
+- **Decisions:** 0 / 10\u201320
+- **State:** pending
+
+## Citations`;
+  return serializeMarkdown({
+    type: "Goal",
+    title: `${title} goal`,
+    description: `Goal for project.`,
+    timestamp: timestamp2,
+    scope: ".",
+    status: "draft",
+    provenance: "observed",
+    uid: randomUUID()
+  }, body);
+}
+function buildScopeDeepGoalContent(scope, timestamp2, deepScan) {
+  const title = titleFromPath(scope);
+  const scopeFiles = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`));
+  const entryPoints = deepScan.architecture.entryPoints.filter((e) => e.startsWith(`${scope}/`));
+  const apiRoutes = deepScan.architecture.apiRoutes.filter((r) => r.startsWith(`${scope}/`));
+  const schemas2 = deepScan.architecture.databaseSchemas.filter((s) => s.startsWith(`${scope}/`));
+  let body = `# Goal
+
+## Scope Summary
+
+Auto-scaffolded scope for \`${scope}\` (${scopeFiles.length} files).
+
+`;
+  if (entryPoints.length > 0) {
+    body += `### Entry Points
+
+`;
+    for (const ep of entryPoints) body += `- \`${ep}\`
+`;
+    body += `
+`;
+  }
+  if (apiRoutes.length > 0) {
+    body += `### API Routes
+
+`;
+    for (const route of apiRoutes) body += `- \`${route}\`
+`;
+    body += `
+`;
+  }
+  if (schemas2.length > 0) {
+    body += `### Schemas & Models
+
+`;
+    for (const schema4 of schemas2) body += `- \`${schema4}\`
+`;
+    body += `
+`;
+  }
+  body += `## Motivation
+
+Pending interview.
+
+## User & outcome
+
+## Success measures
+
+## Scope & non-goals
+
+## Confirmed wants
+
+## Must-not rules
+
+## Requirements
+
+## Acceptance criteria
+
+Use stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.
+
+## Constraints & dependencies
+
+## Decisions & reversals
+
+## Questions & unresolved
+
+## Interview coverage
+
+- **Decisions:** 0 / 10\u201315
+- **State:** pending
+
+## Citations`;
+  return serializeMarkdown({
+    type: "Goal",
+    title: `${title} goal`,
+    description: `Goal for ${scope}.`,
+    timestamp: timestamp2,
+    scope,
+    status: "draft",
+    provenance: "observed",
+    uid: randomUUID()
+  }, body);
+}
 async function initializeBundle(projectRoot, scopes = [], options = {}) {
   const root = resolve2(projectRoot);
   const memoryRoot = bundlePath(root);
@@ -7091,15 +7653,24 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
   const head = await repositoryHead(root);
   await assertWritableBundleVersion(root, true);
   if (await readIfExists(join2(bundlePath(root), "index.md")) !== void 0) await assertValidForMutation(root);
-  const normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+  const isDeep = options.deep ?? true;
+  const deepScan = isDeep ? await deepScanRepository(root) : void 0;
+  let normalizedScopes = [...new Set(scopes.map(assertSafeRelativePath).filter((scope) => scope !== "."))].sort();
+  if (isDeep && deepScan && scopes.length === 0) {
+    const autoCandidates = deepScan.scan.candidates.filter((candidate) => candidate.confidence === "high" || candidate.confidence === "medium").map((candidate) => candidate.path);
+    const packageScopes = deepScan.architecture.packages.map((pkg) => pkg.path);
+    const discovered = [.../* @__PURE__ */ new Set([...autoCandidates, ...packageScopes])].map(assertSafeRelativePath).filter((scope) => scope !== ".").sort();
+    normalizedScopes = [.../* @__PURE__ */ new Set([...normalizedScopes, ...discovered])].sort();
+  }
   for (const scope of normalizedScopes) {
     await assertNoBundleParentSymlink(join2(scopeDirectory(root, scope), "index.md"));
   }
   const unmanagedAgents = await readUnmanagedAgentsContent(root);
   const changes = [];
+  const rootGoalContent = deepScan ? buildDeepGoalContent(".", timestamp2, unmanagedAgents, deepScan) : goalTemplate(".", timestamp2, unmanagedAgents);
   const rootFiles = /* @__PURE__ */ new Map([
     [join2(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename2(root), timestamp2, head)],
-    [join2(memoryRoot, "goal.md"), goalTemplate(".", timestamp2, unmanagedAgents)],
+    [join2(memoryRoot, "goal.md"), rootGoalContent],
     [join2(memoryRoot, "progress.md"), progressTemplate(".", timestamp2)],
     [join2(memoryRoot, "log.md"), logTemplate(".", date)],
     [join2(memoryRoot, "sources", "index.md"), indexTemplate("Sources")]
@@ -7112,16 +7683,19 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
       changes.push({ ...await plannedWrite(path, indexTemplate(titleFromPath(directory2)), dryRun, false), path: relativeChangePath(root, path) });
     }
     const directory = scopeDirectory(root, scope);
+    const scopeGoalContent = deepScan ? buildScopeDeepGoalContent(scope, timestamp2, deepScan) : goalTemplate(scope, timestamp2);
     const files = /* @__PURE__ */ new Map([
-      [join2(directory, "goal.md"), goalTemplate(scope, timestamp2)],
+      [join2(directory, "goal.md"), scopeGoalContent],
       [join2(directory, "progress.md"), progressTemplate(scope, timestamp2)],
       [join2(directory, "log.md"), logTemplate(scope, date)]
     ]);
     for (const [path, content] of files) changes.push({ ...await plannedWrite(path, content, dryRun, false), path: relativeChangePath(root, path) });
   }
   if (!dryRun) {
-    changes.push(...(await syncIndexes(root)).map((change) => ({ ...change, path: relativeChangePath(root, resolve2(root, change.path)) })));
-    changes.push({ ...await syncAgentsFile(root), path: "AGENTS.md" });
+    const agentsChange = await syncAgentsFile(root);
+    const freshScan = await scanRepository(root);
+    changes.push(...(await syncIndexes(root, freshScan, { dryRun, now: date })).map((change) => ({ ...change, path: relativeChangePath(root, resolve2(root, change.path)) })));
+    changes.push({ ...agentsChange, path: "AGENTS.md" });
   }
   return { root, bundle: memoryRoot, scopes: tracked, changes };
 }
@@ -7174,9 +7748,7 @@ function sourceFileLines(projectRoot, indexPath, scope, scan, tests) {
   if (!scan || scope === "." || scope === "sources" || scope.startsWith("sources/")) return [];
   const direct = scan.files.filter((file) => normalizeSlash(dirname2(file.path)) === scope && isTestFile(file.path) === tests);
   return direct.map((file) => {
-    const absoluteSource = resolve2(projectRoot, file.path);
-    const target = normalizeSlash(relative2(dirname2(indexPath), absoluteSource));
-    return markdownEntry(basename2(file.path), target.startsWith(".") ? target : `./${target}`, `${file.extension || "file"}, ${file.size} bytes`);
+    return markdownEntry(basename2(file.path), `repo://${file.path}`, `${file.extension || "file"}, ${file.size} bytes`);
   });
 }
 async function discoverTrackedScopes(projectRoot) {
@@ -7217,7 +7789,7 @@ async function syncIndexes(projectRoot, scan, options = {}) {
       const scope = scopeFromMemoryDirectory(memoryRoot, directory);
       const indexPath = join2(directory, "index.md");
       let content = await readIfExists(indexPath);
-      if (!content) content = directory === memoryRoot ? rootIndexTemplate(basename2(root), nowIso(), fallbackHead) : indexTemplate(titleFromPath(scope));
+      if (!content) content = directory === memoryRoot ? rootIndexTemplate(basename2(root), nowIso(options.now), fallbackHead) : indexTemplate(titleFromPath(scope));
       if (directory === memoryRoot) {
         const rootParsed = parseMarkdown(content);
         if (!rootParsed.hasFrontmatter || rootParsed.errors.length > 0) throw new Error("Root index.md must contain valid frontmatter");
@@ -7235,6 +7807,17 @@ async function syncIndexes(projectRoot, scan, options = {}) {
           scopeLines.push(markdownEntry(trackedScope === "." ? "Project" : trackedScope, target, `${metadata.status ?? "unknown"} \u2014 ${metadata.description}`));
         }
         content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
+        const repoScan = scan ?? await scanRepository(root);
+        const deepScan = await deepScanRepository(root, repoScan);
+        const treemapContent = generateTreemapContent(repoScan, deepScan);
+        if (!content.includes("<!-- memory:generated:start treemap -->")) {
+          if (content.includes("## Documents")) {
+            content = content.replace("## Documents", "## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n\n## Documents");
+          } else {
+            content += "\n\n## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n";
+          }
+        }
+        content = replaceGeneratedRegion(content, "treemap", treemapContent);
         const directDocuments = walk.files.filter((file) => dirname2(file) === memoryRoot && !RESERVED_FILES.has(basename2(file)));
         const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
           const metadata = await documentMetadata(file);
@@ -7251,8 +7834,8 @@ async function syncIndexes(projectRoot, scan, options = {}) {
           content = updateMarkdownFrontmatter(content, {
             repository_head: scan.head ?? null,
             repository_fingerprint: scan.fingerprint,
-            last_scan_at: nowIso(),
-            timestamp: nowIso()
+            last_scan_at: nowIso(options.now),
+            timestamp: nowIso(options.now)
           });
         }
       } else {
@@ -8039,9 +8622,9 @@ var HELP = `Project Memory CLI
 Usage:
   memory <command> [options]
 
-Commands:
+  Commands:
   scan                 Inspect repository files and propose tracked scopes
-  init                 Create .memory and optional tracked scopes
+  init                 Create .memory and optional tracked scopes (deep scan by default)
   scaffold             Add one or more tracked scopes
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
@@ -8053,6 +8636,8 @@ Commands:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
+  --deep                Perform deep codebase ingestion scan during init (default)
+  --shallow             Perform skeleton init without deep codebase scan
   --source <path|url>   Approved source; repeat for multiple sources
   --source-text <text>  Approved brief or conversation text (not stored raw)
   --source-text-file <path> Read approved text from a file
@@ -8075,6 +8660,7 @@ function parseArguments(argv) {
     options: {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
+      deep: { type: "boolean" },
       source: { type: "string", multiple: true },
       "source-text": { type: "string" },
       "source-text-file": { type: "string" },
@@ -8172,8 +8758,10 @@ async function runCli(argv, io = {
       case "init":
       case "scaffold": {
         const requested = [...flags(args, "scope"), ...args.positional].filter(Boolean);
+        const shallow = enabled(args, "shallow");
+        const deep = !shallow;
         const scan = await scanRepository(root);
-        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename3(root) });
+        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename3(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);
         result = { ...initialized, candidates: scan.candidates };
         break;

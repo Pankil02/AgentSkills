@@ -60,24 +60,25 @@ If approval is absent, keep the item unresolved. Never convert silence into appr
 
 ## Initialize and discover scopes
 
-For a new or mid-project codebase, run deep initialization:
+For a new or mid-project codebase, run initialization:
 
 ```sh
-memory init --deep
+memory init
 # or for specific feature scopes:
-memory init --deep --scope path/to/feature
+memory init --scope path/to/feature
 memory validate
 ```
 
 Or trigger `/memory-ingest` in supported agent interfaces.
 
-`memory init --deep` performs a deep-dive scan of the codebase structure:
+`memory init` performs a deep-dive scan of the codebase structure by default:
 - **Beyond AGENTS.md**: Scans directory tree, package manifests (`package.json`, `turbo.json`, `tsconfig.json`, `pyproject.toml`, etc.), framework routes, API handlers, database schemas/models (Prisma, Drizzle, SQLAlchemy, etc.), and feature folders.
+- **Codebase Treemap**: Generates a short, token-efficient file & folder structure treemap with 1-line descriptions directly inside `.memory/index.md` under `## Codebase structure`.
 - **Auto-Populates `.memory/goal.md`**: Fills auto-detected tech stack, framework breakdown, database schemas, primary entry points, API surface, environment variable requirements (`.env.example`), and monorepo package boundaries.
 - **Tracked Scope Auto-Scaffolding**: Automatically scans candidates and scaffolds tracked scope memory files (`.memory/<scope_path>/goal.md`, `index.md`, `progress.md`) for identified core packages and feature directories.
 - **Safe & Non-Destructive**: Secrets, `.env`, `node_modules`, `dist`, `.next`, `.turbo`, and binary assets are strictly excluded. Custom user edits in existing `.memory/` documents are preserved.
 
-Standard init without `--deep` creates the skeleton `.memory/` structure relying on existing context files like `AGENTS.md`.
+Use `memory init --shallow` if you only require skeleton initialization without deep codebase scanning.
 
 Scope candidates are proposals, not facts. Confirm meaningful feature boundaries with the user before tracking them. Initialization must not overwrite existing memory documents.
 
