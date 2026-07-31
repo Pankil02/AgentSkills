@@ -788,7 +788,10 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         const goalPath = join(scopeDirectory(root, trackedScope), "goal.md");
         const metadata = await documentMetadata(goalPath);
         const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
-        scopeLines.push(markdownEntry(trackedScope === "." ? "Project" : trackedScope, target, `${metadata.status ?? "unknown"} — ${metadata.description}`));
+        const label = trackedScope === "." ? "Project" : trackedScope;
+        const status = metadata.status ? `(${metadata.status})` : "";
+        const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` — ${metadata.description}` : "";
+        scopeLines.push(`- [${label}](${target}) ${status}${desc}`.trim());
       }
       content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
 

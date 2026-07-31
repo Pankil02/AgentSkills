@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
   ".memory",
+  ".agents",
   ".idea",
   ".vscode",
   ".svn",
@@ -283,6 +284,7 @@ function candidateDirectories(files: RepositoryFile[]): Map<string, { reasons: S
 
   const add = (path: string, reason: string, file: string) => {
     if (!path || path === "." || isExcludedPath(path)) return;
+    if (path.split("/").length > 4) return;
     const record = candidates.get(path) ?? { reasons: new Set<string>(), files: new Set<string>() };
     record.reasons.add(reason);
     record.files.add(file);
@@ -315,7 +317,7 @@ function candidateDirectories(files: RepositoryFile[]): Map<string, { reasons: S
 
 export function discoverScopeCandidates(files: RepositoryFile[]): ScopeCandidate[] {
   const candidates = candidateDirectories(files);
-  return [...candidates.entries()]
+  const rawList = [...candidates.entries()]
     .map(([path, value]) => {
       const markerReason = [...value.reasons].some((reason) => reason.startsWith("Located under"));
       const fileCount = files.filter((file) => file.path === path || file.path.startsWith(`${path}/`)).length;
@@ -328,6 +330,18 @@ export function discoverScopeCandidates(files: RepositoryFile[]): ScopeCandidate
     })
     .filter((candidate) => candidate.fileCount > 0 && !isExcludedPath(candidate.path))
     .sort((a, b) => a.path.localeCompare(b.path));
+
+  const scopePaths = new Set(rawList.map((c) => c.path));
+  return rawList.filter((candidate) => {
+    const parts = candidate.path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      if (scopePaths.has(parent) && parent !== candidate.path && candidate.confidence !== "high") {
+        return false;
+      }
+    }
+    return true;
+  });
 }
 
 async function assertNoSymlinkPath(root: string, target: string): Promise<void> {
@@ -950,11 +964,23 @@ export function generateTreemapContent(scan: RepositoryScan, deepScan?: DeepScan
   const rootNode = buildTreeHierarchy(scan.files);
   const lines: string[] = ["```", "."];
 
-  function renderChildren(node: TreeNode, indent: string) {
+  function renderChildren(node: TreeNode, indent: string, depth = 0) {
     const children = [...node.children.values()].sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+
+    if (depth >= 4 && children.length > 3) {
+      const keyItems = children.slice(0, 2);
+      const remaining = children.length - 2;
+      for (let i = 0; i < keyItems.length; i++) {
+        const item = keyItems[i];
+        const desc = getShortDescription(item, deepScan);
+        lines.push(`${indent}├── ${item.name}${item.isDir ? "/" : ""}${desc ? ` # ${desc}` : ""}`);
+      }
+      lines.push(`${indent}└── ... (${remaining} more items)`);
+      return;
+    }
 
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
@@ -970,10 +996,10 @@ export function generateTreemapContent(scan: RepositoryScan, deepScan?: DeepScan
         lines.push(`${indent}${prefix}${child.name}/${descComment}`);
 
         const subDirs = [...child.children.values()].filter((c) => c.isDir);
-        if (subDirs.length === 0 && child.children.size > 8) {
+        if (subDirs.length === 0 && child.children.size > 5) {
           const files = [...child.children.values()];
-          const keyFiles = files.slice(0, 5);
-          const remaining = files.length - 5;
+          const keyFiles = files.slice(0, 3);
+          const remaining = files.length - 3;
           for (let j = 0; j < keyFiles.length; j++) {
             const f = keyFiles[j];
             const fDesc = getShortDescription(f, deepScan);
@@ -981,7 +1007,7 @@ export function generateTreemapContent(scan: RepositoryScan, deepScan?: DeepScan
           }
           lines.push(`${childIndent}└── ... (${remaining} more files)`);
         } else {
-          renderChildren(child, childIndent);
+          renderChildren(child, childIndent, depth + 1);
         }
       } else {
         lines.push(`${indent}${prefix}${child.name}${descComment}`);
