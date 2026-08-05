@@ -22,29 +22,31 @@ bunx github:Pankil02/AgentSkills
 
 ### 🚀 Direct 1-Liner Quick Commands
 
-#### Install All Skills to Google Antigravity / Gemini:
+> 💡 **Auto-Update Tip**: Pass `--symlink` (or `-s`) to create symbolic links. Any future `git pull` in this repo will automatically update your installed skills!
+
+#### Install All Skills to Google Antigravity / Gemini (with Auto-Updates):
 ```bash
-npx github:Pankil02/AgentSkills all --target antigravity
+npx github:Pankil02/AgentSkills all --target antigravity --symlink
 ```
 
 #### Install `project-memory` to Pi Agent:
 ```bash
-npx github:Pankil02/AgentSkills project-memory --target pi
+npx github:Pankil02/AgentSkills project-memory --target pi --symlink
 ```
 
 #### Install `software-design-patterns` to Claude Code:
 ```bash
-npx github:Pankil02/AgentSkills software-design-patterns --target claude
+npx github:Pankil02/AgentSkills software-design-patterns --target claude --symlink
 ```
 
 #### Install to Current Project Workspace (`./.agents/skills`):
 ```bash
-npx github:Pankil02/AgentSkills all --local
+npx github:Pankil02/AgentSkills all --local --symlink
 ```
 
 #### Install to a Custom Directory Path:
 ```bash
-npx github:Pankil02/AgentSkills all --path /path/to/custom/skills
+npx github:Pankil02/AgentSkills all --path /path/to/custom/skills --symlink
 ```
 
 ---

@@ -87,10 +87,11 @@ Minimalistic command interface:
 
 | Workflow | Usage | Description |
 |---|---|---|
-| **`/memory-init [scope]`** | `/memory-init`, `/memory-init --deep`, or `/memory-init <scope>` | Initialize `.memory/` bundle & conduct interactive **Grill-Me style interview** (one question at a time with recommended defaults across 3–4 rounds). |
-| **`/memory-ingest [scope]`** | `/memory-ingest` or `/memory-ingest <scope>` | Deep codebase ingestion scan (packages, schemas, API routes, entry points) to populate `.memory/` as project brain. |
-| **`/memory-sync [source]`** | `/memory-sync`, `/memory-sync <path\|url>`, or `--fetch-remote` | Refresh fingerprints, generated indexes, `AGENTS.md`, validate bundle, report status, or register/integrate an approved source. |
-| **`/memory-reflect [scope]`** | `/memory-reflect`, `/memory-reflect <scope>`, or `complete` | Reflect on session work vs approved intent and update progress/evidence, or explicitly approve goal completion (`/memory-reflect complete`). |
+| **`/mem-init [scope]`** | `/mem-init` or `/memory-init` | Initialize `.memory/` bundle & conduct interactive **Grill-Me style interview** (one question at a time with recommended defaults across 3–4 rounds). |
+| **`/mem-ingest [scope]`** | `/mem-ingest` or `/memory-ingest` | Deep codebase ingestion scan (packages, schemas, API routes, entry points) to populate `.memory/` as project brain. |
+| **`/mem-sync [source]`** | `/mem-sync` or `/memory-sync` | Refresh fingerprints, generated indexes, `AGENTS.md`, validate bundle, report status, or register/integrate an approved source. |
+| **`/mem-reflect [scope]`** | `/mem-reflect` or `/memory-reflect` | Reflect on session work vs approved intent and update progress/evidence, or explicitly approve goal completion (`/mem-reflect complete`). |
+| **`/mem-tasks [scope]`** | `/mem-tasks` or `/memory-tasks` | Generate or refresh `.memory/tasks.md` using `/i-have-adhd` principles (single next action, <= 5 active items, bounded numbered steps, concrete time estimates, completed tasks summary). |
 
 ### Grill-Me Style Interview Protocol
 - **One Question at a Time**: Resolves design tree branches sequentially using interactive UI selection tools.
@@ -108,12 +109,14 @@ Minimalistic command interface:
 ├── index.md
 ├── goal.md
 ├── progress.md
+├── tasks.md
 ├── log.md
 ├── sources/
 └── <tracked scope>/
     ├── index.md
     ├── goal.md
     ├── progress.md
+    ├── tasks.md
     └── log.md
 ```
 
@@ -128,6 +131,9 @@ Minimalistic command interface:
 - **`progress.md`**
   - **What it does:** Tracks operational lifecycle state (`not_started`, `in_progress`, `blocked`, `complete`), acceptance criteria verification rows (`AC-xxx` mapped to `repo://` evidence paths), known blockers, and exactly *one next action*.
   - **Why it exists:** Captures real-time operational status and verified evidence. Allows any coding agent or developer to immediately resume work without guessing what was tested or what step to take next.
+- **`tasks.md`**
+  - **What it does:** Formats and organizes active project tasks formatted with `/i-have-adhd` principles (single next action first, <= 5 active items, numbered single-bounded steps, concrete time estimates `[X min]`).
+  - **Why it exists:** Reduces working memory friction and allows immediate action execution for readers/agents using ADHD-friendly productivity rules.
 - **`log.md`**
   - **What it does:** Stores an append-only audit trail of project history ordered by date (newest first). Records key events such as decisions, reversals, requirement updates, source integrations, work items, and completion approvals.
   - **Why it exists:** Preserves historical rationale and context over time. Ensures prior decisions, rejected alternatives, and course corrections are never silently lost or rewritten.

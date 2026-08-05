@@ -45,7 +45,7 @@ const GOAL_TRANSITIONS: Record<string, Set<string>> = {
   archived: new Set(["draft"]),
 };
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
-const CORE_FILES = ["index.md", "goal.md", "progress.md", "log.md"] as const;
+const CORE_FILES = ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"] as const;
 const MAX_CONTEXT_PREVIEW = 20_000;
 
 export type Severity = "error" | "warning";
@@ -465,6 +465,46 @@ Not started.
 Continue interview.`);
 }
 
+function tasksTemplate(scope: string, timestamp: string): string {
+  const title = titleFromPath(scope);
+  return serializeMarkdown({
+    type: "Tasks",
+    title: `${title} tasks`,
+    description: `Task breakdown for ${scope === "." ? "project" : scope} formatted with ADHD and project-memory principles.`,
+    timestamp,
+    scope,
+    uid: randomUUID(),
+  }, `# Tasks
+
+## Single next action
+
+- **Action:** Define project requirements & task list.
+- **File / Command:** Edit \`.memory/tasks.md\` or run \`/memory-init\`.
+- **Time estimate:** [5 min]
+
+## Current state
+
+Step 0 of 0 done: Pending task breakdown. Next: Define initial tasks.
+
+## Active tasks (Do Now)
+
+> [!NOTE]
+> Maximum 5 active items. Numbered single-bounded steps only.
+
+1. [ ] **Define project requirements** \`[15 min]\` (REQ-001) — Specify main features in \`goal.md\`
+2. [ ] **Scaffold feature scopes** \`[10 min]\` (REQ-002) — Set up tracked scopes in \`.memory/\`
+
+## Backlog (Do Later)
+
+- [ ] **Acceptance criteria verification** \`[30 min]\` (AC-001) — Map test evidence paths
+
+## Completed tasks summary
+
+- **Total completed:** 0
+- **Summary:** No tasks completed yet.
+`);
+}
+
 function logTemplate(scope: string, timestamp: Date): string {
   return `# ${titleFromPath(scope)} History\n\n## ${today(timestamp)}\n\n### Initialization\n- **Update:** Initialized \`${scope}\` memory.\n- **Evidence:** System init.\n`;
 }
@@ -635,6 +675,7 @@ export async function initializeBundle(
     [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head)],
     [join(memoryRoot, "goal.md"), rootGoalContent],
     [join(memoryRoot, "progress.md"), progressTemplate(".", timestamp)],
+    [join(memoryRoot, "tasks.md"), tasksTemplate(".", timestamp)],
     [join(memoryRoot, "log.md"), logTemplate(".", date)],
     [join(memoryRoot, "sources", "index.md"), indexTemplate("Sources")],
   ]);
@@ -653,6 +694,7 @@ export async function initializeBundle(
     const files = new Map<string, string>([
       [join(directory, "goal.md"), scopeGoalContent],
       [join(directory, "progress.md"), progressTemplate(scope, timestamp)],
+      [join(directory, "tasks.md"), tasksTemplate(scope, timestamp)],
       [join(directory, "log.md"), logTemplate(scope, date)],
     ]);
     for (const [path, content] of files) changes.push({ ...(await plannedWrite(path, content, dryRun, false)), path: relativeChangePath(root, path) });

@@ -30,7 +30,7 @@ async function promptUser(query) {
   return answer.trim();
 }
 
-function installSkill(skillName, destDir) {
+function installSkill(skillName, destDir, useSymlink = false) {
   const srcDir = path.join(REPO_ROOT, skillName);
   if (!fs.existsSync(srcDir)) {
     console.error(`\n❌ Error: Skill "${skillName}" not found in repository.`);
@@ -38,8 +38,26 @@ function installSkill(skillName, destDir) {
   }
 
   const targetPath = path.join(destDir, skillName);
-  fs.mkdirSync(targetPath, { recursive: true });
+  fs.mkdirSync(destDir, { recursive: true });
 
+  try {
+    if (fs.existsSync(targetPath) || fs.lstatSync(targetPath).isSymbolicLink()) {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    }
+  } catch (_) {}
+
+  if (useSymlink) {
+    try {
+      const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+      fs.symlinkSync(srcDir, targetPath, symlinkType);
+      console.log(`  🔗 Symlinked "${skillName}" -> ${targetPath}`);
+      return true;
+    } catch (err) {
+      console.warn(`  ⚠️ Symlink failed (${err.message}). Falling back to copy...`);
+    }
+  }
+
+  fs.mkdirSync(targetPath, { recursive: true });
   fs.cpSync(srcDir, targetPath, {
     recursive: true,
     filter: (src) => {
@@ -67,11 +85,13 @@ async function main() {
       pi: { type: 'boolean' },
       claude: { type: 'boolean' },
       local: { type: 'boolean' },
+      symlink: { type: 'boolean', short: 's' }
     }
   });
 
   let selectedSkills = [];
   let targetPath = null;
+  let useSymlink = Boolean(values.symlink);
 
   // Determine skills to install
   const requestedSkill = positionals[0];
@@ -138,11 +158,20 @@ async function main() {
     targetPath = TARGET_PRESETS[selectedKey].path;
   }
 
-  console.log(`\nInstalling skill(s) into: ${targetPath}\n`);
+  if (!values.symlink && process.isTTY) {
+    const installType = await promptUser(`\nInstallation Mode:\n  [1] Symlink (auto-updates when repo is pulled) [default]\n  [2] Copy (standalone files)\nSelect (1 or 2): `);
+    if (installType.trim() === '2') {
+      useSymlink = false;
+    } else {
+      useSymlink = true;
+    }
+  }
+
+  console.log(`\nInstalling skill(s) into: ${targetPath} (Mode: ${useSymlink ? 'Symlink 🔗' : 'Copy 📁'})\n`);
 
   let count = 0;
   for (const skill of selectedSkills) {
-    if (installSkill(skill, targetPath)) {
+    if (installSkill(skill, targetPath, useSymlink)) {
       count++;
     }
   }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -15,7 +15,13 @@ const pluginRoot = join(agentsRoot, "plugins", "project-memory");
 const skillsRoot = join(agentsRoot, "skills", "project-memory");
 const globalSkillsRoot = join(homedir(), ".gemini", "config", "skills", "project-memory");
 const hooksPath = join(agentsRoot, "hooks.json");
-const names = ["init", "ingest", "sync", "reflect"];
+const workflowFiles = [
+  "mem-init.md", "memory-init.md",
+  "mem-ingest.md", "memory-ingest.md",
+  "mem-sync.md", "memory-sync.md",
+  "mem-reflect.md", "memory-reflect.md",
+  "mem-tasks.md", "memory-tasks.md",
+];
 
 async function linkOrCopy(source, target, isDir = false) {
   await mkdir(dirname(target), { recursive: true });
@@ -33,12 +39,34 @@ async function linkOrCopy(source, target, isDir = false) {
   return "copied";
 }
 
+const force = process.argv.includes("--force") || process.argv.includes("-f") || useSymlink;
+const hookNames = ["project-memory-context", "project-memory-write-guard", "project-memory-stale-reminder"];
+const destinations = [
+  pluginRoot,
+  join(agentsRoot, "rules", "project-memory.md"),
+  ...workflowFiles.map((file) => join(agentsRoot, "workflows", file)),
+];
+
 let existingHooks = {};
 try {
   existingHooks = JSON.parse(await readFile(hooksPath, "utf8"));
   if (!existingHooks || Array.isArray(existingHooks) || typeof existingHooks !== "object") throw new Error("Antigravity hooks.json must contain an object");
 } catch (error) {
   if (error?.code !== "ENOENT") throw error;
+}
+
+if (!force) {
+  for (const path of destinations) {
+    try {
+      await access(path);
+      throw new Error(`Refusing to replace existing Antigravity file: ${path}`);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  for (const name of hookNames) {
+    if (Object.hasOwn(existingHooks, name)) throw new Error(`Refusing to replace existing Antigravity hook: ${name}`);
+  }
 }
 
 function shellQuote(value) {
@@ -71,8 +99,8 @@ const skillMode = await linkOrCopy(join(packageRoot, "skills", "memory"), skills
 await linkOrCopy(join(packageRoot, "scripts", "antigravity-hook.mjs"), installedScript, false);
 await linkOrCopy(join(packageRoot, "rules", "memory.md"), join(agentsRoot, "rules", "project-memory.md"), false);
 
-for (const name of names) {
-  await linkOrCopy(join(packageRoot, "workflows", `memory-${name}.md`), join(agentsRoot, "workflows", `memory-${name}.md`), false);
+for (const file of workflowFiles) {
+  await linkOrCopy(join(packageRoot, "workflows", file), join(agentsRoot, "workflows", file), false);
 }
 
 try {

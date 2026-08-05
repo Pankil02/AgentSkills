@@ -7157,7 +7157,7 @@ var GOAL_TRANSITIONS = {
   archived: /* @__PURE__ */ new Set(["draft"])
 };
 var FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
-var CORE_FILES = ["index.md", "goal.md", "progress.md", "log.md"];
+var CORE_FILES = ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"];
 var MAX_CONTEXT_PREVIEW = 2e4;
 function normalizeSlash(path) {
   return path.split(sep2).join("/");
@@ -7523,6 +7523,45 @@ Not started.
 
 Continue interview.`);
 }
+function tasksTemplate(scope, timestamp2) {
+  const title = titleFromPath(scope);
+  return serializeMarkdown({
+    type: "Tasks",
+    title: `${title} tasks`,
+    description: `Task breakdown for ${scope === "." ? "project" : scope} formatted with ADHD and project-memory principles.`,
+    timestamp: timestamp2,
+    scope,
+    uid: randomUUID()
+  }, `# Tasks
+
+## Single next action
+
+- **Action:** Define project requirements & task list.
+- **File / Command:** Edit \`.memory/tasks.md\` or run \`/memory-init\`.
+- **Time estimate:** [5 min]
+
+## Current state
+
+Step 0 of 0 done: Pending task breakdown. Next: Define initial tasks.
+
+## Active tasks (Do Now)
+
+> [!NOTE]
+> Maximum 5 active items. Numbered single-bounded steps only.
+
+1. [ ] **Define project requirements** \`[15 min]\` (REQ-001) \u2014 Specify main features in \`goal.md\`
+2. [ ] **Scaffold feature scopes** \`[10 min]\` (REQ-002) \u2014 Set up tracked scopes in \`.memory/\`
+
+## Backlog (Do Later)
+
+- [ ] **Acceptance criteria verification** \`[30 min]\` (AC-001) \u2014 Map test evidence paths
+
+## Completed tasks summary
+
+- **Total completed:** 0
+- **Summary:** No tasks completed yet.
+`);
+}
 function logTemplate(scope, timestamp2) {
   return `# ${titleFromPath(scope)} History
 
@@ -7779,6 +7818,7 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
     [join2(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename2(root), timestamp2, head)],
     [join2(memoryRoot, "goal.md"), rootGoalContent],
     [join2(memoryRoot, "progress.md"), progressTemplate(".", timestamp2)],
+    [join2(memoryRoot, "tasks.md"), tasksTemplate(".", timestamp2)],
     [join2(memoryRoot, "log.md"), logTemplate(".", date)],
     [join2(memoryRoot, "sources", "index.md"), indexTemplate("Sources")]
   ]);
@@ -7794,6 +7834,7 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
     const files = /* @__PURE__ */ new Map([
       [join2(directory, "goal.md"), scopeGoalContent],
       [join2(directory, "progress.md"), progressTemplate(scope, timestamp2)],
+      [join2(directory, "tasks.md"), tasksTemplate(scope, timestamp2)],
       [join2(directory, "log.md"), logTemplate(scope, date)]
     ]);
     for (const [path, content] of files) changes.push({ ...await plannedWrite(path, content, dryRun, false), path: relativeChangePath(root, path) });
@@ -8499,7 +8540,8 @@ var AGENTS_START = "<!-- memory:start -->";
 var AGENTS_END = "<!-- memory:end -->";
 var AGENTS_BLOCK = `${AGENTS_START}
 Project memory lives in \`.memory/\`. Keep all documents ultra-short, compact, concise, and token-efficient.
-Before work, read \`.memory/index.md\`, then the matching scope's goal and progress.
+Before any work in \`.memory/\`, check and read \`.memory/index.md\` (or root \`index.md\`), then the matching scope's goal and progress.
+Always keep \`index.md\` and \`AGENTS.md\` updated when project requirements, scope, or memory change.
 Treat user-confirmed wants, must-not rules, and acceptance criteria as requirements.
 Ask instead of guessing when intent is missing, inferred, stale, or contradictory.
 When a source changes, integrate it into the existing wiki instead of merely indexing it.

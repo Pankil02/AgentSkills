@@ -23,7 +23,13 @@ Observe → route → ask → confirm → apply → verify → record → contin
 
 Generated facts and indexes may update automatically. Goals, preferences, non-goals, acceptance criteria, and material contradiction resolutions require approval. Removed sources/scopes become stale or orphaned; do not delete them automatically.
 
-Every update, mutation, and log append MUST adhere to strict token efficiency: keep sentences brief, omit fluff, use short telegraphic style, and avoid duplicating existing text.
+Every update, mutation, and log append MUST adhere to strict token efficiency and ADHD principles:
+- **Lead with next action**: Always state the exact next action first (file path or executable command).
+- **Cap active lists at 5**: Cap active requirements, tasks, and criteria at 5 items max; push extra items to a "Later / Backlog" section.
+- **Single bounded numbered steps**: Do not combine multiple actions into single numbered items using "and then".
+- **State restatement**: Format updates as `Step X of Y done: <completed item>. Next: <concrete single action>`.
+- **Concrete time estimates**: Provide specific estimates (e.g. 5-15 mins).
+- Keep sentences brief, omit conversational fluff, use short telegraphic style, and avoid duplicating existing text.
 
 ## Progressive read
 
