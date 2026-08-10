@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import kiloModule, { ProjectMemoryKiloPlugin } from "../extensions/kilo.ts";
 import projectMemory from "../extensions/memory.ts";
-import { initializeBundle } from "../src/bundle.ts";
+import { buildMemoryContext, initializeBundle } from "../src/bundle.ts";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -218,9 +218,9 @@ test("Kilo plugin injects active memory and a one-shot edit reminder", async (t)
   await transform({}, first);
   assert.equal(first.system.length, 1);
   assert.match(first.system[0], /ACTIVE INDEX/);
-  assert.match(first.system[0], /ACTIVE GOAL \(\.\)/);
-  assert.match(first.system[0], /ACTIVE PROGRESS/);
-  assert(first.system[0].length <= 18_000);
+  assert.doesNotMatch(first.system[0], /ACTIVE GOAL/);
+  assert.doesNotMatch(first.system[0], /ACTIVE PROGRESS/);
+  assert(Buffer.byteLength(first.system[0], "utf8") <= 6_000);
 
   await hooks.event({ event: { type: "file.edited", properties: { file: join(project, "src", "feature.ts") } } });
   const reminded = { system: [] as string[] };
@@ -289,4 +289,91 @@ test("package metadata exposes the exact package, CLI, Pi extension, and skill",
   assert.deepEqual(packageJson.pi.extensions, ["./extensions/memory.ts"]);
   assert.deepEqual(packageJson.pi.skills, ["./skills/memory"]);
   assert.equal(packageJson.engines.node, ">=20");
+});
+
+test("All adapters (Pi, Kilo, Antigravity, buildMemoryContext) emit byte-identical bounded context regardless of oversized goal and progress", async (t) => {
+  const project = await mkdtemp(join(tmpdir(), "project-memory-parity-"));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await initializeBundle(project);
+
+  // Inflate goal, progress, and log with large content
+  await writeFile(join(project, ".memory", "goal.md"), `---
+type: Goal
+title: Huge Goal
+description: Oversized goal description
+status: active
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Goal
+${"Long goal content that should not be auto-injected\\n".repeat(1000)}
+`);
+
+  await writeFile(join(project, ".memory", "progress.md"), `---
+type: Progress
+title: Huge Progress
+description: Oversized progress description
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Progress
+${"Long progress content that should not be auto-injected\\n".repeat(1000)}
+`);
+
+  await writeFile(join(project, ".memory", "log.md"), `# Log\n${"Long log entry\n".repeat(2000)}`);
+
+  // 1. Shared buildMemoryContext()
+  const baseContext = await buildMemoryContext(project);
+  assert.match(baseContext, /\[PROJECT MEMORY\]/);
+  assert.match(baseContext, /ACTIVE INDEX/);
+  assert.doesNotMatch(baseContext, /Long goal content/);
+  assert.doesNotMatch(baseContext, /Long progress content/);
+  assert(Buffer.byteLength(baseContext, "utf8") <= 6_000);
+
+  // 2. Pi before_agent_start hook
+  let beforeAgentStartHandler: any;
+  const piApi = {
+    registerTool() {},
+    registerCommand() {},
+    on(name: string, handler: unknown) {
+      if (name === "before_agent_start") beforeAgentStartHandler = handler;
+    },
+  } as unknown as ExtensionAPI;
+  projectMemory(piApi);
+  const piResult = await beforeAgentStartHandler(undefined, { cwd: project });
+  const piContent = piResult?.message?.content;
+  assert.equal(piContent, baseContext);
+
+  // 3. Kilo experimental.chat.system.transform
+  const kiloHooks = await ProjectMemoryKiloPlugin({ directory: project, worktree: project });
+  const kiloOutput = { system: [] as string[] };
+  await kiloHooks["experimental.chat.system.transform"]({}, kiloOutput);
+  assert.equal(kiloOutput.system[0], baseContext);
+
+  // 4. Antigravity pre-invocation hook
+  const installer = join(root, "scripts", "install-antigravity.mjs");
+  await execFileAsync(process.execPath, [installer, project]);
+  const hooks = JSON.parse(await readFile(join(project, ".agents", "hooks.json"), "utf8"));
+  const command = hooks["project-memory-context"].PreInvocation[0].hooks[0].command;
+  const antigravityResult = await runHookCommand(command, {
+    workspacePaths: [project],
+    artifactDirectoryPath: join(project, ".artifacts"),
+    invocationNum: 0,
+  }, project);
+  const antigravityMessage = (antigravityResult.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage;
+  assert.equal(antigravityMessage, baseContext);
+});
+
+test("All adapters suppress injection and emit structured error message when root index exceeds 6,000 bytes", async (t) => {
+  const project = await mkdtemp(join(tmpdir(), "project-memory-budget-error-"));
+  t.after(() => rm(project, { recursive: true, force: true }));
+  await initializeBundle(project);
+
+  const hugeIndex = `# Oversized Index\n${"x".repeat(7_000)}`;
+  await writeFile(join(project, ".memory", "index.md"), hugeIndex);
+
+  const context = await buildMemoryContext(project);
+  assert.match(context, /\[PROJECT MEMORY ERROR\]/);
+  assert.match(context, /\.memory\/index\.md exceeds the byte budget/);
+  assert.match(context, /memory compact --dry-run/);
 });

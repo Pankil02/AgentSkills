@@ -55,6 +55,27 @@ test("CLI initializes, validates, reports status, and supports plan files", asyn
   assert.equal(await runCli(["status", "--root", root, "--toon"], io), 0, errors.join("\n"));
   const toonStatus = output.pop()!;
   assert.match(toonStatus, /^init:true\|root:/);
+  assert.equal(await runCli(["context", "--root", root], io), 0, errors.join("\n"));
+  const cliContext = output.pop()!;
+  assert.match(cliContext, /\[PROJECT MEMORY\]/);
+  assert.match(cliContext, /ACTIVE INDEX/);
+  assert.doesNotMatch(cliContext, /ACTIVE GOAL/);
+  assert.equal(await runCli(["context", "--root", root, "--json"], io), 0, errors.join("\n"));
+  const cliJsonContext = JSON.parse(output.pop()!);
+  assert.match(cliJsonContext.context, /\[PROJECT MEMORY\]/);
+  assert.equal(cliJsonContext.scope, ".");
+  assert.equal(await runCli(["map", "--root", root], io), 0, errors.join("\n"));
+  const cliMap = output.pop()!;
+  assert.match(cliMap, /index\.ts/);
+  assert.equal(await runCli(["map", "--root", root, "--json"], io), 0, errors.join("\n"));
+  const cliMapJson = JSON.parse(output.pop()!);
+  assert.match(cliMapJson.treemap, /index\.ts/);
+  assert.ok(cliMapJson.filesCount >= 1);
+  assert.equal(await runCli(["map", "--root", root, "--toon"], io), 0, errors.join("\n"));
+  const cliMapToon = output.pop()!;
+  assert.match(cliMapToon, /^root:/);
+  assert.match(cliMapToon, /index\.ts/);
+
   assert.equal(await runCli(["sync", "--root", root, "--json"], io), 0, errors.join("\n"));
   output.pop();
   assert.equal(await runCli(["sync", "--check", "--root", root, "--json"], io), 0, errors.join("\n"));
@@ -171,24 +192,34 @@ test("Antigravity finds memory from a nested Git workspace", async (t) => {
   assert.match((result.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage, /PROJECT MEMORY/);
 });
 
-test("Antigravity context keeps the beginning and actionable tail", async (t) => {
+test("Antigravity context injects root index only and ignores oversized goal and progress", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
-  await writeFile(join(root, ".memory", "goal.md"), `GOAL START\n${"g".repeat(9_000)}\nGOAL END`);
-  await writeFile(join(root, ".memory", "progress.md"), `PROGRESS START\n${"p".repeat(9_000)}\nNEXT ACTION: verify tail`);
+  await writeFile(join(root, ".memory", "goal.md"), `GOAL START\n${"g".repeat(20_000)}\nGOAL END`);
+  await writeFile(join(root, ".memory", "progress.md"), `PROGRESS START\n${"p".repeat(20_000)}\nNEXT ACTION: verify tail`);
   const result = await runHook("pre-invocation", {
     workspacePaths: [root],
     artifactDirectoryPath: join(root, ".artifacts"),
     invocationNum: 0,
   });
   const message = (result.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage;
-  assert.match(message, /GOAL START/);
-  assert.match(message, /GOAL END/);
-  assert.match(message, /PROGRESS START/);
-  assert.match(message, /NEXT ACTION: verify tail/);
-  assert.match(message, /middle truncated/);
-  assert(message.length <= 18_000);
+  assert.match(message, /\[PROJECT MEMORY\]/);
+  assert.match(message, /ACTIVE INDEX/);
+  assert.doesNotMatch(message, /GOAL START/);
+  assert.doesNotMatch(message, /PROGRESS START/);
+  assert(Buffer.byteLength(message, "utf8") <= 6_000);
+
+  // When root index exceeds budget, returns structured error instead of truncated markdown
+  await writeFile(join(root, ".memory", "index.md"), `# Huge\n${"x".repeat(7_000)}`);
+  const errorResult = await runHook("pre-invocation", {
+    workspacePaths: [root],
+    artifactDirectoryPath: join(root, ".artifacts"),
+    invocationNum: 0,
+  });
+  const errorMessage = (errorResult.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage;
+  assert.match(errorMessage, /\[PROJECT MEMORY ERROR\]/);
+  assert.match(errorMessage, /memory compact --dry-run/);
 });
 
 test("Antigravity notices repeated edits to an already dirty Git file", async (t) => {

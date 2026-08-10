@@ -21,6 +21,14 @@ export const MEMORY_DIRECTORY = ".memory";
 export const MEMORY_VERSION = "0.1";
 export const RESERVED_FILES = new Set(["index.md", "log.md"]);
 
+export const MAX_ROOT_INDEX_BYTES = 6_000;
+export const WARN_ROOT_INDEX_BYTES = 4_000;
+export const MAX_SCOPE_INDEX_BYTES = 8_000;
+export const MAX_AUTO_CONTEXT_BYTES = 6_000;
+export const WARN_DOCUMENT_BYTES = 16_000;
+export const MAX_ACTIVE_TASKS = 5;
+export const MAX_GENERATED_LINE_BYTES = 240;
+
 const GOAL_STATUSES = new Set([
   "draft",
   "interviewing",
@@ -361,42 +369,66 @@ async function plannedWrite(path: string, content: string, dryRun: boolean, over
   };
 }
 
-function rootIndexTemplate(projectName: string, timestamp: string, head?: string): string {
+function rootIndexTemplate(
+  projectName: string,
+  timestamp: string,
+  head?: string,
+  deepScan?: DeepScanResult,
+): string {
+  const stackParts: string[] = [];
+  if (deepScan?.techStack.languages.length) stackParts.push(deepScan.techStack.languages.join(", "));
+  if (deepScan?.techStack.frameworks.length) stackParts.push(deepScan.techStack.frameworks.slice(0, 3).join(", "));
+  if (deepScan?.techStack.testingTools.length) stackParts.push(deepScan.techStack.testingTools.slice(0, 2).join(", "));
+  const stack = stackParts.length > 0 ? stackParts.join("; ") : "Node.js, TypeScript / JavaScript";
+
+  let shape = "CLI in `bin/`; runtime in `src/`; skills at repository root.";
+  if (deepScan?.architecture.packages.length) {
+    shape = `Monorepo with ${deepScan.architecture.packages.length} package(s): ${deepScan.architecture.packages.slice(0, 3).map((p) => `\`${p.path}\``).join(", ")}${deepScan.architecture.packages.length > 3 ? "..." : ""}`;
+  } else if (deepScan?.architecture.entryPoints.length) {
+    shape = `Entry points: ${deepScan.architecture.entryPoints.slice(0, 3).map((e) => `\`${e}\``).join(", ")}`;
+  }
+
   return serializeMarkdown({
     memory_version: MEMORY_VERSION,
+    project: projectName,
+    summary: `${projectName} project memory root.`,
+    active_scope: ".",
+    active_objective: "OBJ-001",
+    status: "draft",
     title: `${projectName} Project Memory`,
-    description: "Project memory root.",
+    description: "Executive memory capsule.",
     timestamp,
     repository_head: head ?? null,
     repository_fingerprint: null,
     last_scan_at: null,
-    active_scope: ".",
   }, `# Project Memory
 
-## Current focus
+## Project
+- Purpose: ${projectName} project.
+- Stack: ${stack}
+- Shape: ${shape}
+- Rules: Standard library first; atomic writes; no secret indexing.
 
-<!-- memory:generated:start focus -->
-<!-- memory:generated:end focus -->
+## Active
+<!-- memory:generated:start active -->
+- Objective: [OBJ-001](/goal.md) Project goal.
+- Scope: [Project](/goal.md)
+- State: draft
+- Next: Complete interview.
+- Blocker: none
+<!-- memory:generated:end active -->
 
-## Tracked scopes
+## Map
+- [Goal](/goal.md) — approved objectives and key results
+- [Progress](/progress.md) — current evidence and state
+- [Tasks](/tasks.md) — at most five active actions
+- [History](/log.md) — append-only decisions and work
+- [Sources](/sources/) — provenance records
 
+## Scopes
 <!-- memory:generated:start scopes -->
-<!-- memory:generated:end scopes -->
-
-## Codebase structure
-
-<!-- memory:generated:start treemap -->
-<!-- memory:generated:end treemap -->
-
-## Documents
-
-<!-- memory:generated:start documents -->
-<!-- memory:generated:end documents -->
-
-## Sources
-
-<!-- memory:generated:start sources -->
-<!-- memory:generated:end sources -->`);
+- [Project](/goal.md) — active
+<!-- memory:generated:end scopes -->`);
 }
 
 function indexTemplate(title: string): string {
@@ -672,7 +704,7 @@ export async function initializeBundle(
     : goalTemplate(".", timestamp, unmanagedAgents);
 
   const rootFiles = new Map<string, string>([
-    [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head)],
+    [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head, deepScan)],
     [join(memoryRoot, "goal.md"), rootGoalContent],
     [join(memoryRoot, "progress.md"), progressTemplate(".", timestamp)],
     [join(memoryRoot, "tasks.md"), tasksTemplate(".", timestamp)],
@@ -823,46 +855,86 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
       const progressPath = join(scopeDirectory(root, activeScope), "progress.md");
       const progress = await readIfExists(progressPath);
       const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
-      content = replaceGeneratedRegion(content, "focus", `- **Active scope:** \`${activeScope}\`\n- **Next action:** ${next ? next.replace(/\n+/g, " ") : "Not set."}`);
+      const nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
+      const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
+      const blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
+
+      const goalPath = join(scopeDirectory(root, activeScope), "goal.md");
+      const goalContent = await readIfExists(goalPath);
+      const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
+      const goalStatus = goalParsed?.data.status ? String(goalParsed.data.status) : (typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft");
+
+      let objectiveId = typeof rootParsed.data.active_objective === "string" ? rootParsed.data.active_objective : "OBJ-001";
+      let objectiveTitle = "";
+      if (goalContent) {
+        const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
+        if (objMatch) {
+          objectiveId = objMatch[1];
+          objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
+        } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
+          objectiveTitle = ` ${goalParsed.data.title}`;
+        }
+      }
+      const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/goal.md`;
+      const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/`;
+      const scopeLabel = activeScope === "." ? "Project" : activeScope;
+
+      const activeText = `- Objective: [${objectiveId}](${goalLink})${objectiveTitle}\n- Scope: [${scopeLabel}](${scopeLink})\n- State: ${goalStatus}\n- Next: ${nextClean}\n- Blocker: ${blockerClean}`;
+
+      if (content.includes("<!-- memory:generated:start active -->")) {
+        content = replaceGeneratedRegion(content, "active", activeText);
+      } else if (content.includes("<!-- memory:generated:start focus -->")) {
+        content = replaceGeneratedRegion(content, "focus", activeText);
+      }
+
+      const sortedScopes = [...scopes];
+      const activeIdx = sortedScopes.indexOf(activeScope);
+      if (activeIdx > -1) {
+        sortedScopes.splice(activeIdx, 1);
+        sortedScopes.unshift(activeScope);
+      }
+      const visibleScopes = sortedScopes.slice(0, 5);
+      const remainingCount = sortedScopes.length - visibleScopes.length;
 
       const scopeLines: string[] = [];
-      for (const trackedScope of scopes) {
-        const goalPath = join(scopeDirectory(root, trackedScope), "goal.md");
-        const metadata = await documentMetadata(goalPath);
+      for (const trackedScope of visibleScopes) {
+        const scopeGoalPath = join(scopeDirectory(root, trackedScope), "goal.md");
+        const metadata = await documentMetadata(scopeGoalPath);
         const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
         const label = trackedScope === "." ? "Project" : trackedScope;
         const status = metadata.status ? `(${metadata.status})` : "";
+        const isActive = trackedScope === activeScope ? " — active" : "";
         const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` — ${metadata.description}` : "";
-        scopeLines.push(`- [${label}](${target}) ${status}${desc}`.trim());
+        scopeLines.push(`- [${label}](${target})${status ? ` ${status}` : ""}${isActive}${desc}`.replace(/\s+/g, " ").trim());
       }
-      content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
-
-      const repoScan = scan ?? await scanRepository(root);
-      const deepScan = await deepScanRepository(root, repoScan);
-      const treemapContent = generateTreemapContent(repoScan, deepScan);
-
-      if (!content.includes("<!-- memory:generated:start treemap -->")) {
-        if (content.includes("## Documents")) {
-          content = content.replace("## Documents", "## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n\n## Documents");
-        } else {
-          content += "\n\n## Codebase structure\n\n<!-- memory:generated:start treemap -->\n<!-- memory:generated:end treemap -->\n";
-        }
+      if (remainingCount > 0) {
+        scopeLines.push(`- ... (${remainingCount} more tracked scope(s))`);
       }
-      content = replaceGeneratedRegion(content, "treemap", treemapContent);
+      if (content.includes("<!-- memory:generated:start scopes -->")) {
+        content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
+      }
 
-      const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
-      const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
-        const metadata = await documentMetadata(file);
-        return markdownEntry(metadata.title, `/${basename(file)}`, metadata.description);
-      }));
-      content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No root documents.");
+      if (content.includes("<!-- memory:generated:start treemap -->")) {
+        content = replaceGeneratedRegion(content, "treemap", "");
+      }
 
-      const sourceFiles = walk.files.filter((file) => dirname(file) === join(memoryRoot, "sources") && basename(file) !== "index.md");
-      const sourceLines = await Promise.all(sourceFiles.sort().map(async (file) => {
-        const metadata = await documentMetadata(file);
-        return markdownEntry(metadata.title, `/sources/${basename(file)}`, metadata.description);
-      }));
-      content = replaceGeneratedRegion(content, "sources", sourceLines.join("\n") || "- No sources registered.");
+      if (content.includes("<!-- memory:generated:start documents -->")) {
+        const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
+        const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
+          const metadata = await documentMetadata(file);
+          return markdownEntry(metadata.title, `/${basename(file)}`, metadata.description);
+        }));
+        content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No root documents.");
+      }
+
+      if (content.includes("<!-- memory:generated:start sources -->")) {
+        const sourceFiles = walk.files.filter((file) => dirname(file) === join(memoryRoot, "sources") && basename(file) !== "index.md");
+        const sourceLines = await Promise.all(sourceFiles.sort().map(async (file) => {
+          const metadata = await documentMetadata(file);
+          return markdownEntry(metadata.title, `/sources/${basename(file)}`, metadata.description);
+        }));
+        content = replaceGeneratedRegion(content, "sources", sourceLines.join("\n") || "- No sources registered.");
+      }
 
       if (scan && ((scan.head ?? null) !== rootParsed.data.repository_head || scan.fingerprint !== rootParsed.data.repository_fingerprint)) {
         content = updateMarkdownFrontmatter(content, {
@@ -1343,6 +1415,69 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+export interface BuildMemoryContextOptions {
+  scope?: string;
+  budget?: number;
+  toon?: boolean;
+}
+
+export function formatMemoryContext(indexContent: string): string {
+  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the linked wiki before broad repository reads or exploration. Ask rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
+}
+
+export function formatMemoryBudgetError(path: string, byteLength: number, budget: number): string {
+  return `[PROJECT MEMORY ERROR]\n${path} exceeds the byte budget (${byteLength} > ${budget} bytes).\nAutomatic context injection was suppressed to prevent token budget blowup and partial truncation.\nRun \`memory compact --dry-run\` or reduce index size to restore automatic injection.`;
+}
+
+export async function buildMemoryContext(
+  projectRoot: string,
+  options?: BuildMemoryContextOptions,
+): Promise<string> {
+  const root = resolve(projectRoot);
+  const memoryRoot = bundlePath(root);
+  const rootIndexPath = join(memoryRoot, "index.md");
+  const rootIndex = await readIfExists(rootIndexPath);
+  if (!rootIndex) {
+    throw new Error("Project Memory root index.md not found");
+  }
+
+  const budget = options?.budget ?? MAX_AUTO_CONTEXT_BYTES;
+  const indexBytes = Buffer.byteLength(rootIndex, "utf8");
+
+  if (indexBytes > budget) {
+    return formatMemoryBudgetError(".memory/index.md", indexBytes, budget);
+  }
+
+  let fullContent = rootIndex;
+  if (options?.scope && options.scope !== ".") {
+    const safeScope = assertSafeRelativePath(options.scope);
+    const scopeIndexPath = join(memoryRoot, ...safeScope.split("/"), "index.md");
+    const scopeIndex = await readIfExists(scopeIndexPath);
+    if (scopeIndex) {
+      const scopeBytes = Buffer.byteLength(scopeIndex, "utf8");
+      if (indexBytes + scopeBytes > budget) {
+        return formatMemoryBudgetError(`.memory/${safeScope}/index.md (combined with root index)`, indexBytes + scopeBytes, budget);
+      }
+      fullContent = `${rootIndex}\n\n<!-- scope:${safeScope} -->\n${scopeIndex}`;
+    }
+  }
+
+  if (options?.toon) {
+    const parsed = parseMarkdown(rootIndex);
+    const toonObj = {
+      project: parsed.data.project ?? parsed.data.title ?? "Project",
+      active_scope: parsed.data.active_scope ?? ".",
+      active_objective: parsed.data.active_objective ?? parsed.data.status ?? "in_progress",
+      index_bytes: indexBytes,
+      budget,
+      index: fullContent,
+    };
+    return JSON.stringify(toonObj, null, 2);
+  }
+
+  return formatMemoryContext(fullContent);
+}
+
 export async function validateBundle(projectRoot: string): Promise<ValidationResult> {
   const root = resolve(projectRoot);
   const memoryRoot = bundlePath(root);
@@ -1374,17 +1509,45 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
     const rel = normalizeSlash(relative(root, path));
     const name = basename(path);
     const content = await readFile(path, "utf8");
+    const byteLength = Buffer.byteLength(content, "utf8");
+
     for (const markerError of validateGeneratedMarkers(content)) diagnostics.push({ severity: "error", code: "markers", path: rel, message: markerError });
+
+    const generatedMatches = content.matchAll(/<!--\s*memory:generated:start[^\n]*\n([\s\S]*?)<!--\s*memory:generated:end/g);
+    for (const match of generatedMatches) {
+      for (const line of match[1].split("\n")) {
+        if (Buffer.byteLength(line, "utf8") > MAX_GENERATED_LINE_BYTES) {
+          diagnostics.push({ severity: "warning", code: "budget-generated-line", path: rel, message: `Generated line exceeds ${MAX_GENERATED_LINE_BYTES} bytes (${Buffer.byteLength(line, "utf8")} bytes)` });
+          break;
+        }
+      }
+    }
 
     const parsed = parseMarkdown(content);
     const reserved = RESERVED_FILES.has(name);
     const rootIndexFile = path === rootIndexPath;
+
+    if (rootIndexFile) {
+      if (byteLength > MAX_ROOT_INDEX_BYTES) {
+        diagnostics.push({ severity: "error", code: "budget-root-index", path: rel, message: `Root index exceeds ${MAX_ROOT_INDEX_BYTES} bytes budget (${byteLength} bytes)` });
+      } else if (byteLength > WARN_ROOT_INDEX_BYTES) {
+        diagnostics.push({ severity: "warning", code: "budget-root-index", path: rel, message: `Root index exceeds ${WARN_ROOT_INDEX_BYTES} bytes target (${byteLength} bytes)` });
+      }
+    } else if (name === "index.md") {
+      if (byteLength > MAX_SCOPE_INDEX_BYTES) {
+        diagnostics.push({ severity: "error", code: "budget-scope-index", path: rel, message: `Scope index exceeds ${MAX_SCOPE_INDEX_BYTES} bytes budget (${byteLength} bytes)` });
+      }
+    }
+
     if (!reserved && !rootIndexFile) {
       if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "frontmatter", path: rel, message: parsed.errors.join("; ") || "Document requires YAML frontmatter" });
       else if (typeof parsed.data.type !== "string" || !parsed.data.type.trim()) diagnostics.push({ severity: "error", code: "type", path: rel, message: "Document frontmatter requires a non-empty type" });
     }
 
     if (name === "goal.md") {
+      if (byteLength > WARN_DOCUMENT_BYTES) {
+        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `goal.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
+      }
       scopeDirectories.add(dirname(path));
       const status = parsed.data.status;
       if (typeof status !== "string" || !GOAL_STATUSES.has(status)) diagnostics.push({ severity: "error", code: "goal-status", path: rel, message: `Invalid goal status: ${String(status)}` });
@@ -1404,6 +1567,22 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
         });
         if (headingCount !== 1 || !nextAction || missingNextActionField) {
           diagnostics.push({ severity: "error", code: "next-action", path: rel, message: "Active goals require exactly one approved, evidence-linked Next action with Action, Requirement, Likely files, Verification, and Approval" });
+        }
+      }
+    }
+
+    if (parsed.data.type === "Progress" || name === "progress.md") {
+      if (byteLength > WARN_DOCUMENT_BYTES) {
+        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `progress.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
+      }
+    }
+
+    if (name === "tasks.md" || parsed.data.type === "Tasks") {
+      const activeSection = extractSection(content, "Active tasks (Do Now)") || extractSection(content, "Active tasks");
+      if (activeSection) {
+        const taskLines = activeSection.split("\n").filter((l) => /^\s*(?:\d+\.|\*|-)\s*\[[ xX ]?\]/i.test(l) || /^\s*\d+\.\s+\*\*/.test(l));
+        if (taskLines.length > MAX_ACTIVE_TASKS) {
+          diagnostics.push({ severity: "error", code: "budget-active-tasks", path: rel, message: `Active tasks exceeds limit of ${MAX_ACTIVE_TASKS} items (${taskLines.length} tasks found)` });
         }
       }
     }
@@ -1695,3 +1874,11 @@ export async function withBundleLock<T>(projectRoot: string, callback: () => Pro
     await rm(lockPath, { force: true });
   }
 }
+
+export async function generateMemoryMap(projectRoot: string): Promise<string> {
+  const root = resolve(projectRoot);
+  const scan = await scanRepository(root);
+  const deepScan = await deepScanRepository(root, scan);
+  return generateTreemapContent(scan, deepScan);
+}
+

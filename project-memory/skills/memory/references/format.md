@@ -11,13 +11,16 @@ A bundle is a UTF-8 Markdown wiki rooted at `.memory/`. The root and every track
 
 Intermediate grouping directories require only `index.md`. Additional documents are created when useful. `.memory/sources/` stores one source record per approved raw source.
 
-## Token Efficiency
+## Token Efficiency & Hard Budgets
 
 Every file, line, and piece of text in `.memory/` MUST be ultra-short, compact, concise, and token-efficient.
+- **Root `index.md`**: hard budget of 6,000 UTF-8 bytes (warning above 4,000 bytes).
+- **Scope `index.md`**: hard budget of 8,000 UTF-8 bytes.
+- **Active tasks**: maximum 5 items in `tasks.md`.
+- **Auto-injected context**: only `.memory/index.md` is automatically loaded (≤ 6,000 bytes).
+- **Generated lines**: maximum 240 UTF-8 bytes per generated line.
 - Avoid multi-paragraph descriptions, filler, repetitive headers, and template text.
-- Use dense, telegraphic bullet points and minimal table formatting.
-- When mutating, updating, appending, or deleting content, strictly retain only necessary semantic information.
-- Short and compact files save context tokens and keep LLM context pristine.
+- Short and compact files turn memory overhead from O(repository size) into O(1) startup + O(active scope).
 
 ## Documents
 
@@ -35,7 +38,7 @@ provenance: observed
 ---
 ```
 
-The root `index.md` is the only index allowed to have frontmatter and declares `memory_version: "0.1"`.
+The root `index.md` is an executive memory capsule and the only index with frontmatter. It contains `## Project` (1-line facts), `## Active` (active objective, scope, state, next action, blocker), `## Map` (standard navigation links), and `## Scopes` (bounded list of up to 5 scopes). Codebase treemaps are generated on demand via `memory map` rather than inflated in the root index.
 
 ## Identity, requirement IDs, and links
 
@@ -59,12 +62,16 @@ Never promote `inferred` to `user-confirmed` without explicit approval.
 Indexes group child directories and documents with standard Markdown links and one-line descriptions. Generated content is bounded by named markers:
 
 ```md
-<!-- memory:generated:start children -->
+<!-- memory:generated:start active -->
 ...
-<!-- memory:generated:end children -->
+<!-- memory:generated:end active -->
+
+<!-- memory:generated:start scopes -->
+...
+<!-- memory:generated:end scopes -->
 ```
 
-Only valid generated regions may be replaced. Preserve all prose outside them.
+Only valid generated regions may be replaced. Preserve all prose outside them. Root `index.md` caps visible scopes to 5 entries. Full repository layouts are disclosed progressively via `memory map`.
 
 ## Logs
 

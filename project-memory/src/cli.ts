@@ -4,7 +4,9 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   applyMemoryPlan,
+  buildMemoryContext,
   discoverTrackedScopes,
+  generateMemoryMap,
   getMemoryStatus,
   initializeBundle,
   parseMarkdown,
@@ -16,6 +18,7 @@ import {
   syncIndexes,
   validateBundle,
   withBundleLock,
+  MAX_AUTO_CONTEXT_BYTES,
   type MemoryPlan,
 } from "./bundle.ts";
 import {
@@ -47,6 +50,8 @@ Usage:
   scaffold             Add one or more tracked scopes
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
+  context              Emit the exact context agents should receive
+  map                  Generate on-demand codebase treemap & architecture layout
   record               Register a source and/or append a history event
   validate             Validate format, links, lifecycle, and freshness
   agents-sync          Add or repair the managed AGENTS.md block
@@ -55,6 +60,7 @@ Usage:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
+  --budget <bytes>      Byte budget for context command (default: 6000)
   --deep                Perform deep codebase ingestion scan during init (default)
   --shallow             Perform skeleton init without deep codebase scan
   --source <path|url>   Approved source; repeat for multiple sources
@@ -81,6 +87,7 @@ function parseArguments(argv: string[]): ParsedArguments {
     options: {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
+      budget: { type: "string" },
       deep: { type: "boolean" },
       source: { type: "string", multiple: true },
       "source-text": { type: "string" },
@@ -148,6 +155,11 @@ export function formatToon(value: unknown): string {
     const changes = object.changes as Array<{ action: string; path: string }>;
     if (changes.length === 0) return "changes:none";
     return `changes[action|path]:\n${changes.map((c) => `  ${c.action}|${c.path}`).join("\n")}`;
+  }
+
+  if ("treemap" in object) {
+    const head = `root:${object.root ?? object.projectRoot}|files:${object.files ?? object.filesCount ?? 0}`;
+    return `${head}\n${object.treemap}`;
   }
 
   return Object.entries(object)
@@ -253,6 +265,47 @@ export async function runCli(argv: string[], io: CliIO = {
       }
       case "status": {
         result = await getMemoryStatus(root, flag(args, "scope") ?? args.positional[0]);
+        break;
+      }
+      case "context": {
+        const scope = flag(args, "scope") ?? args.positional[0];
+        const budgetStr = flag(args, "budget");
+        const budget = budgetStr ? parseInt(budgetStr, 10) : undefined;
+        const toon = enabled(args, "toon");
+        const context = await buildMemoryContext(root, { scope, budget, toon });
+        if (context.startsWith("[PROJECT MEMORY ERROR]")) {
+          io.stderr(json ? JSON.stringify({ error: context }) : context);
+          return 1;
+        }
+        if (json) {
+          result = { context, scope: scope ?? ".", budget: budget ?? MAX_AUTO_CONTEXT_BYTES };
+        } else {
+          io.stdout(context);
+          return 0;
+        }
+        break;
+      }
+      case "map": {
+        const treemap = await generateMemoryMap(root);
+        if (json) {
+          const scan = await scanRepository(root);
+          result = {
+            projectRoot: root,
+            fingerprint: scan.fingerprint,
+            filesCount: scan.files.length,
+            treemap,
+          };
+        } else if (enabled(args, "toon")) {
+          const scan = await scanRepository(root);
+          result = {
+            root,
+            files: scan.files.length,
+            treemap,
+          };
+        } else {
+          io.stdout(treemap);
+          return 0;
+        }
         break;
       }
       case "record": {

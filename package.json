@@ -1,15 +1,29 @@
 {
   "name": "@pankil/agent-skills",
-  "version": "1.0.0",
-  "description": "One-command CLI installer for AI Agent Skills (Google Antigravity, Pi, Claude Code, Kilo, Gemini)",
+  "version": "1.1.0",
+  "description": "Enterprise-grade CLI and curated skills ecosystem for AI coding agents (Antigravity, Cursor, Claude Code, Pi, Gemini, Codex)",
   "type": "module",
-  "main": "bin/install.js",
+  "main": "src/index.js",
   "bin": {
-    "agent-skills": "./bin/install.js",
-    "install-skill": "./bin/install.js"
+    "agent-skills": "./bin/cli.js",
+    "skills-installer": "./bin/cli.js",
+    "skills": "./bin/cli.js"
   },
+  "files": [
+    "bin",
+    "src",
+    "project-memory",
+    "software-design-patterns",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "install-skills": "node bin/install.js"
+    "start": "node bin/cli.js",
+    "install-skills": "node bin/cli.js install",
+    "doctor": "node bin/cli.js doctor",
+    "validate": "node bin/cli.js validate",
+    "list": "node bin/cli.js list",
+    "test": "node --test tests/**/*.test.js"
   },
   "repository": {
     "type": "git",
@@ -17,15 +31,28 @@
   },
   "keywords": [
     "agent-skills",
+    "ai-agent",
     "antigravity",
+    "claude-code",
+    "cursor",
     "gemini",
     "pi",
-    "claude-code",
-    "kilo-code",
-    "ai-agent",
+    "codex",
+    "skills-sh",
     "project-memory",
-    "software-design-patterns"
+    "software-design-patterns",
+    "developer-tools"
   ],
   "author": "Pankil",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.8.2",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {}
 }

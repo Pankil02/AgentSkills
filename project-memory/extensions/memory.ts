@@ -5,6 +5,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   applyMemoryPlan,
+  buildMemoryContext,
   checkCompletionReadiness,
   discoverTrackedScopes,
   getMemoryStatus,
@@ -484,17 +485,8 @@ export default function projectMemory(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (_event, ctx) => {
     try {
       const root = await findProjectRoot(ctx.cwd);
-      const indexPath = resolve(root, ".memory", "index.md");
-      const index = await readFile(indexPath, "utf8");
-      const parsed = parseMarkdown(index);
-      const scope = assertSafeRelativePath(typeof parsed.data.active_scope === "string" ? parsed.data.active_scope : ".");
-      const scopeRoot = scope === "." ? resolve(root, ".memory") : resolve(root, ".memory", ...scope.split("/"));
-      const [goal, progress] = await Promise.all([
-        readFile(join(scopeRoot, "goal.md"), "utf8"),
-        readFile(join(scopeRoot, "progress.md"), "utf8"),
-      ]);
-      const content = `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the linked wiki before broad repository reads, use memory_ask for focused clarification, and use memory_apply for all memory updates. Ask rather than guess; semantic changes require explicit approval.\n\nACTIVE INDEX\n${index.slice(0, 5_000)}\n\nACTIVE GOAL (${scope})\n${goal.slice(0, 6_000)}\n\nACTIVE PROGRESS\n${progress.slice(0, 6_000)}`;
-      return { message: { customType: "project-memory-context", content: content.slice(0, 18_000), display: false } };
+      const content = await buildMemoryContext(root);
+      return { message: { customType: "project-memory-context", content, display: false } };
     } catch {
       return;
     }

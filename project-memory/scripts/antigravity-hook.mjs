@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const MAX_CONTEXT = 18_000;
+const MAX_AUTO_CONTEXT_BYTES = 6_000;
 const STATE_FILE = "project-memory-hook-state.json";
 const GIT_TIMEOUT = 2_500;
 const FINGERPRINT_DEADLINE = 2_500;
@@ -85,11 +85,12 @@ function activeScope(index) {
   return scope;
 }
 
-function excerpt(text, limit) {
-  if (text.length <= limit) return text;
-  const marker = "\n\n[...middle truncated...]\n\n";
-  const head = Math.ceil((limit - marker.length) * 0.6);
-  return text.slice(0, head) + marker + text.slice(-(limit - marker.length - head));
+function formatMemoryContext(indexContent) {
+  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the linked wiki before broad repository reads or exploration. Ask rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
+}
+
+function formatMemoryBudgetError(path, byteLength, budget) {
+  return `[PROJECT MEMORY ERROR]\n${path} exceeds the byte budget (${byteLength} > ${budget} bytes).\nAutomatic context injection was suppressed to prevent token budget blowup and partial truncation.\nRun \`memory compact --dry-run\` or reduce index size to restore automatic injection.`;
 }
 
 async function canonicalTarget(path) {
@@ -195,15 +196,18 @@ async function preInvocation(input) {
   const root = await findMemoryRoot(input.workspacePaths);
   if (!root) return { injectSteps: [] };
   const memoryRoot = join(root, ".memory");
-  const index = await safeRead(join(memoryRoot, "index.md"), memoryRoot);
-  const scope = activeScope(index);
-  const scopeRoot = scope === "." ? memoryRoot : resolve(memoryRoot, scope);
-  if (!inside(memoryRoot, scopeRoot)) throw new Error("Active scope escaped memory bundle");
-  const [goal, progress] = await Promise.all([
-    safeRead(join(scopeRoot, "goal.md"), memoryRoot),
-    safeRead(join(scopeRoot, "progress.md"), memoryRoot),
-  ]);
-  const message = `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the wiki before broad repository exploration. Ask rather than guess. Semantic intent, contradiction resolution, and completion require explicit user approval. Use the memory CLI for generated regions and append-only history. New sources must be integrated into existing topic/entity pages with citations, not merely indexed.\n\nACTIVE INDEX\n${excerpt(index, 4_800)}\n\nACTIVE GOAL (${scope})\n${excerpt(goal, 5_600)}\n\nACTIVE PROGRESS\n${excerpt(progress, 5_600)}`;
+  const indexPath = join(memoryRoot, "index.md");
+  let index;
+  try {
+    index = await safeRead(indexPath, memoryRoot);
+  } catch {
+    return { injectSteps: [] };
+  }
+  const indexBytes = Buffer.byteLength(index, "utf8");
+  const message = indexBytes > MAX_AUTO_CONTEXT_BYTES
+    ? formatMemoryBudgetError(".memory/index.md", indexBytes, MAX_AUTO_CONTEXT_BYTES)
+    : formatMemoryContext(index);
+
   try {
     const artifactPath = input.artifactDirectoryPath ? await canonicalTarget(resolve(input.artifactDirectoryPath)) : undefined;
     const excluded = artifactPath && inside(root, artifactPath) ? artifactPath : undefined;
@@ -212,7 +216,7 @@ async function preInvocation(input) {
   } catch (error) {
     process.stderr.write(`Project Memory fingerprint unavailable: ${error.message}\n`);
   }
-  return { injectSteps: [{ ephemeralMessage: message.slice(0, MAX_CONTEXT) }] };
+  return { injectSteps: [{ ephemeralMessage: message }] };
 }
 
 function toolTarget(toolCall, workspace) {

@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   applyMemoryPlan,
   checkCompletionReadiness,
+  generateMemoryMap,
   initializeBundle,
   parseMarkdown,
   readUnmanagedAgentsContent,
@@ -483,15 +484,108 @@ test("initializeBundle with deep scan auto-scaffolds candidate scopes and popula
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 });
 
-test("initializeBundle generates codebase treemap in root index.md by default", async (t) => {
+test("initializeBundle creates executive root index capsule and provides treemap on demand", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
   const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
-  assert.match(rootIndex, /## Codebase structure/);
-  assert.match(rootIndex, /<!-- memory:generated:start treemap -->/);
-  assert.match(rootIndex, /profile\.ts # API route handler/);
-  assert.match(rootIndex, /docs\/ # Documentation/);
+  assert.match(rootIndex, /## Project/);
+  assert.match(rootIndex, /## Active/);
+  assert.match(rootIndex, /## Map/);
+  assert.match(rootIndex, /## Scopes/);
+  assert.doesNotMatch(rootIndex, /## Codebase structure/);
+
+  const treemap = await generateMemoryMap(root);
+  assert.match(treemap, /profile\.ts # API route handler/);
+  assert.match(treemap, /docs\/ # Documentation/);
+});
+
+test("validation enforces hard byte budgets on root index and scope index", async (t) => {
+  const root = await temporaryProject(false);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root, ["src/feature"]);
+
+  // 1. Root index warnings (> 4000) and errors (> 6000)
+  const originalIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  await writeFile(join(root, ".memory", "index.md"), `${originalIndex}\n<!-- pad -->\n${"x".repeat(3_000)}`);
+  let validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+  assert(validation.diagnostics.some((d) => d.code === "budget-root-index" && d.severity === "warning"));
+
+  await writeFile(join(root, ".memory", "index.md"), `${originalIndex}\n<!-- pad -->\n${"x".repeat(5_500)}`);
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "budget-root-index" && d.severity === "error"));
+
+  // Restore root index
+  await writeFile(join(root, ".memory", "index.md"), originalIndex);
+
+  // 2. Scope index error (> 8000)
+  const originalScopeIndex = await readFile(join(root, ".memory", "src", "feature", "index.md"), "utf8");
+  await writeFile(join(root, ".memory", "src", "feature", "index.md"), `${originalScopeIndex}\n<!-- pad -->\n${"x".repeat(8_500)}`);
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "budget-scope-index" && d.severity === "error"));
+});
+
+test("validation enforces active tasks limit and document size warnings", async (t) => {
+  const root = await temporaryProject(false);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root);
+
+  // 1. Document size warning (> 16,000 bytes)
+  const originalGoal = await readFile(join(root, ".memory", "goal.md"), "utf8");
+  await writeFile(join(root, ".memory", "goal.md"), `${originalGoal}\n### Extra\n${"y".repeat(17_000)}`);
+  let validation = await validateBundle(root);
+  assert.equal(validation.ok, true);
+  assert(validation.diagnostics.some((d) => d.code === "budget-document-size" && d.severity === "warning"));
+  await writeFile(join(root, ".memory", "goal.md"), originalGoal);
+
+  // 2. Active tasks limit (> 5 tasks error)
+  const originalTasks = await readFile(join(root, ".memory", "tasks.md"), "utf8");
+  const tooManyTasks = originalTasks.replace("## Active tasks (Do Now)", `## Active tasks (Do Now)\n\n1. [ ] Task 1\n2. [ ] Task 2\n3. [ ] Task 3\n4. [ ] Task 4\n5. [ ] Task 5\n6. [ ] Task 6`);
+  await writeFile(join(root, ".memory", "tasks.md"), tooManyTasks);
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "budget-active-tasks" && d.severity === "error"));
+});
+
+test("large repository with 100 tracked scopes produces bounded root index <= 6,000 bytes and <= 5 visible scopes", async (t) => {
+  const root = await temporaryProject(false);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // Create 100 scopes with dummy source files
+  const scopes: string[] = [];
+  for (let i = 0; i < 100; i++) {
+    const scopePath = `packages/pkg-${i.toString().padStart(3, "0")}`;
+    scopes.push(scopePath);
+    await mkdir(join(root, scopePath), { recursive: true });
+    await writeFile(join(root, scopePath, "index.ts"), `export const pkg${i} = ${i};\n`);
+  }
+
+  await initializeBundle(root, scopes, { deep: false });
+  await syncIndexes(root);
+
+  const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  const byteLength = Buffer.byteLength(rootIndex, "utf8");
+
+  // Verify byte budget: must be well under 6,000 bytes (and under 4,000 bytes target)
+  assert.ok(byteLength <= 6_000, `Root index exceeds 6000 bytes: ${byteLength} bytes`);
+  assert.ok(byteLength <= 4_000, `Root index exceeds 4000 bytes warning threshold: ${byteLength} bytes`);
+
+  // Verify scopes section contains at most 5 entries plus summary line
+  const scopesSection = rootIndex.split("<!-- memory:generated:start scopes -->")[1]?.split("<!-- memory:generated:end scopes -->")[0] ?? "";
+  const scopeItemLines = scopesSection.trim().split("\n").filter((l) => l.trim().startsWith("- ["));
+  assert.equal(scopeItemLines.length, 5, `Expected exactly 5 visible scope items, found ${scopeItemLines.length}`);
+  assert.match(scopesSection, /- \.\.\. \(96 more tracked scope\(s\)\)/);
+
+  const validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+
+  // Verify memory map generates on demand without inflating startup context
+  const treemap = await generateMemoryMap(root);
+  assert.match(treemap, /pkg-000/);
+  assert.match(treemap, /pkg-099/);
 });
 
 

@@ -1,8 +1,15 @@
 ---
 name: software-design-patterns
 description: Selects, applies, refactors, and reviews software design patterns and architectures without overengineering. Use when designing boundaries or extensibility, untangling coupling or conditionals, choosing GoF/domain/data/concurrency/distributed patterns, comparing architectural styles, or reviewing pattern use, reliability, testability, and migration risk. Adapts guidance to the repository's language, framework, conventions, scale, deployment model, and operational constraints.
-metadata:
-  version: "1.1.0"
+version: 1.1.0
+author: Pankil
+license: MIT
+tags:
+  - architecture
+  - design-patterns
+  - refactoring
+  - anti-overengineering
+  - best-practices
 ---
 
 # Software Design Pattern Decisions

@@ -25,12 +25,26 @@ Then run `/memory-init` (or `/memory-ingest`) to conduct the interactive **Grill
 
 ## Install
 
-### Pi
+### ⚡ 1-Command Universal Install (Recommended)
 
+Install `project-memory` into any AI coding agent with one command:
+
+```bash
+# Interactive wizard (Antigravity, Claude Code, Cursor, Pi, Codex)
+npx github:Pankil02/AgentSkills install project-memory --symlink
+
+# Or via skills.sh (Vercel)
+npx skills@latest add Pankil02/AgentSkills --skill project-memory
+```
+
+---
+
+### Platform-Specific Native Extensions
+
+#### Pi
 ```sh
 pi install ./project-memory
 ```
-
 This installs the skill, Pi extension, `memory_ask` and `memory_apply` tools, and the master slash commands (`/memory-init`, `/memory-ingest`, `/memory-sync`, `/memory-reflect`).
 
 ### Kilo Code

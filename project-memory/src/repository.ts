@@ -197,6 +197,21 @@ export function assertSafeRelativePath(path: string): string {
   return normalized;
 }
 
+const LOCKFILE_NAMES = new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "cargo.lock",
+  "gemfile.lock",
+  "poetry.lock",
+  "composer.lock",
+  "flake.lock",
+  "bun.lockb",
+  "bun.lock",
+  "mix.lock",
+  "podfile.lock",
+]);
+
 export function isSecretLike(path: string): boolean {
   const name = basename(path);
   if (/^\.env\.(?:example|template|sample|schema)$/i.test(name)) return false;
@@ -211,6 +226,8 @@ export function containsLikelySecret(content: string | Buffer): boolean {
 export function isExcludedPath(path: string): boolean {
   const normalized = normalizeRelative(path);
   const parts = normalized.split("/");
+  const last = parts[parts.length - 1]?.toLowerCase();
+  if (last && LOCKFILE_NAMES.has(last)) return true;
   return parts.some((part) => {
     const lower = part.toLowerCase();
     if (EXCLUDED_DIRECTORIES.has(lower) || isSecretLike(lower)) return true;

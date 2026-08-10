@@ -34,7 +34,7 @@ Candidates are evidence, not approved semantic scopes.
 
 ## `init` and `scaffold`
 
-Performs deep codebase scanning by default (scaffolding tech stack and generating a token-efficient treemap in `.memory/index.md`). Accepts optional `--scope <path>` flags and `--shallow` flag for skeleton initialization without deep codebase scanning.
+Performs deep codebase scanning by default (scaffolding tech stack and generating a token-efficient executive capsule in `.memory/index.md`). Accepts optional `--scope <path>` flags and `--shallow` flag for skeleton initialization without deep codebase scanning.
 
 ```json
 {
@@ -43,6 +43,19 @@ Performs deep codebase scanning by default (scaffolding tech stack and generatin
   "scopes": [".", "src/feature"],
   "changes": ["Common change objects"],
   "candidates": ["Scope candidate objects"]
+}
+```
+
+## `map`
+
+Generates the complete codebase treemap with architectural annotations on demand without inflating the startup context.
+
+```json
+{
+  "projectRoot": "/absolute/project",
+  "fingerprint": "sha256:...",
+  "filesCount": 42,
+  "treemap": "```\n.\n├── src/ # Source code root\n...\n```"
 }
 ```
 
