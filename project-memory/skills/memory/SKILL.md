@@ -19,19 +19,21 @@ Durable project wiki in `.memory/`. Linked, human-readable Markdown brain for LL
 ## Quick Commands
 
 - **Init**: `memory init` (or `memory init --deep` for full code scan, `memory init --scope <path>`)
+- **Migrate**: `memory migrate` (upgrades 0.1 legacy bundle to 0.2 architecture lenses)
 - **Status**: `memory status --toon`
 - **Validate**: `memory validate`
 - **Record Source**: `memory record --source <path|url> --json`
 - **Sync**: `memory sync --json`
 - **Apply Plan**: `memory apply --plan-file <path>`
 
-## Start Every Task
+## Start Every Task (DDD & Architecture Route)
 
-1. Read `.memory/index.md` if present.
-2. Read target scope's `goal.md`, `progress.md`, and `tasks.md`.
-3. Treat approved wants, must-nots, non-goals, acceptance criteria, and corrections as binding requirements.
-4. Use wiki context before broad repository exploration.
-5. If memory is missing or stale, stop and ask rather than guessing intent.
+1. Read `.memory/index.md` executive router (< 4 KB budget).
+2. Follow routing path: System Flow (`.memory/architecture/system-design/Flow.md`) → relevant layer `Flow.md` (`frontend`, `backend`, `domain`, `security`, etc.) → target scope's `goal.md`, `progress.md`, and `tasks.md`.
+3. **Mandatory DDD Gate**: Before implementing any task, check and verify the domain bounded context, ubiquitous language terms, and business invariants in domain logic.
+4. Treat approved wants, must-nots, non-goals, acceptance criteria, and corrections as binding requirements.
+5. Use wiki context before broad repository exploration.
+6. If memory is missing or stale, stop and ask rather than guessing intent.
 
 ## Core ADHD Principles for Memory
 

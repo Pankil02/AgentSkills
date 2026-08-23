@@ -86,7 +86,7 @@ function activeScope(index) {
 }
 
 function formatMemoryContext(indexContent) {
-  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the linked wiki before broad repository reads or exploration. Ask rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
+  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient.\nRead this index first. Route through System Flow → relevant layer Flow → scope goal/progress. Apply the DDD gate before implementation.\nAsk rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources, architecture flows) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
 }
 
 function formatMemoryBudgetError(path, byteLength, budget) {

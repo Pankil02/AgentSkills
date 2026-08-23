@@ -7,27 +7,34 @@ import {
   assertSafeRelativePath,
   containsLikelySecret,
   deepScanRepository,
+  discoverArchitectureLayers,
   fingerprintSource,
   generateTreemapContent,
   isExcludedPath,
   isPathInside,
+  type ArchitectureDiscoveryResult,
+  type ArchitectureEvidence,
+  type ArchitectureLayer,
   type DeepScanResult,
   type RepositoryScan,
+  ALL_ARCHITECTURE_LAYERS,
+  CONDITIONAL_ARCHITECTURE_LAYERS,
+  MANDATORY_ARCHITECTURE_LAYERS,
   repositoryHead,
   scanRepository,
 } from "./repository.ts";
 
-export const MEMORY_DIRECTORY = ".memory";
-export const MEMORY_VERSION = "0.1";
-export const RESERVED_FILES = new Set(["index.md", "log.md"]);
+const MEMORY_DIRECTORY = ".memory";
+const MEMORY_VERSION = "0.2";
+const RESERVED_FILES = new Set(["index.md", "log.md"]);
 
-export const MAX_ROOT_INDEX_BYTES = 6_000;
-export const WARN_ROOT_INDEX_BYTES = 4_000;
-export const MAX_SCOPE_INDEX_BYTES = 8_000;
+const MAX_ROOT_INDEX_BYTES = 6_000;
+const WARN_ROOT_INDEX_BYTES = 4_000;
+const MAX_SCOPE_INDEX_BYTES = 8_000;
 export const MAX_AUTO_CONTEXT_BYTES = 6_000;
-export const WARN_DOCUMENT_BYTES = 16_000;
-export const MAX_ACTIVE_TASKS = 5;
-export const MAX_GENERATED_LINE_BYTES = 240;
+const WARN_DOCUMENT_BYTES = 16_000;
+const MAX_ACTIVE_TASKS = 5;
+const MAX_GENERATED_LINE_BYTES = 240;
 
 const GOAL_STATUSES = new Set([
   "draft",
@@ -200,7 +207,7 @@ export function parseMarkdown(content: string): ParsedMarkdown {
   return { data, body: match[2], document, hasFrontmatter: true, errors };
 }
 
-export function serializeMarkdown(data: Record<string, unknown>, body: string): string {
+function serializeMarkdown(data: Record<string, unknown>, body: string): string {
   const document = new Document(data);
   const yaml = document.toString({ lineWidth: 0 }).trimEnd();
   return `---\n${yaml}\n---\n${body.replace(/^\n+/, "").replace(/\s*$/, "")}\n`;
@@ -218,7 +225,7 @@ export function updateMarkdownFrontmatter(content: string, values: Record<string
   return `---\n${yaml}\n---\n${parsed.body.replace(/^\n+/, "").replace(/\s*$/, "")}\n`;
 }
 
-export function validateGeneratedMarkers(content: string): string[] {
+function validateGeneratedMarkers(content: string): string[] {
   const diagnostics: string[] = [];
   const regions = new Map<string, { starts: number; ends: number; start: number; end: number }>();
   const markerPattern = /<!--\s*memory:generated:(start|end)\s+([a-z0-9_-]+)\s*-->/gi;
@@ -335,7 +342,7 @@ async function readIfExists(path: string): Promise<string | undefined> {
   }
 }
 
-async function assertWritableBundleVersion(projectRoot: string, allowMissing = false): Promise<void> {
+async function assertWritableBundleVersion(projectRoot: string, allowMissing = false, allowLegacyMigration = false): Promise<void> {
   const path = join(bundlePath(projectRoot), "index.md");
   const content = await readIfExists(path);
   if (content === undefined) {
@@ -345,6 +352,7 @@ async function assertWritableBundleVersion(projectRoot: string, allowMissing = f
   const parsed = parseMarkdown(content);
   if (!parsed.hasFrontmatter || parsed.errors.length > 0) throw new Error("Root index has invalid frontmatter; repair it before mutation");
   if (parsed.data.memory_version !== MEMORY_VERSION) {
+    if (allowLegacyMigration && parsed.data.memory_version === "0.1") return;
     throw new Error(`Unsupported writable memory_version: ${String(parsed.data.memory_version)} (expected ${MEMORY_VERSION})`);
   }
 }
@@ -374,6 +382,8 @@ function rootIndexTemplate(
   timestamp: string,
   head?: string,
   deepScan?: DeepScanResult,
+  fingerprint?: string,
+  detectedLayers: ArchitectureLayer[] = ["system-design", "domain", "security"],
 ): string {
   const stackParts: string[] = [];
   if (deepScan?.techStack.languages.length) stackParts.push(deepScan.techStack.languages.join(", "));
@@ -388,8 +398,17 @@ function rootIndexTemplate(
     shape = `Entry points: ${deepScan.architecture.entryPoints.slice(0, 3).map((e) => `\`${e}\``).join(", ")}`;
   }
 
+  const routeOrder: ArchitectureLayer[] = ["frontend", "gateway-edge", "auth", "backend", "domain", "database"];
+  const activeRoute = routeOrder
+    .filter((l) => detectedLayers.includes(l))
+    .map((l) => titleFromPath(l))
+    .join(" → ") || "Domain";
+
   return serializeMarkdown({
     memory_version: MEMORY_VERSION,
+    architecture_mode: "ddd",
+    architecture_index: "/architecture/",
+    system_flow: "/architecture/system-design/Flow.md",
     project: projectName,
     summary: `${projectName} project memory root.`,
     active_scope: ".",
@@ -399,36 +418,413 @@ function rootIndexTemplate(
     description: "Executive memory capsule.",
     timestamp,
     repository_head: head ?? null,
-    repository_fingerprint: null,
-    last_scan_at: null,
+    repository_fingerprint: fingerprint ?? null,
+    last_scan_at: timestamp,
   }, `# Project Memory
 
 ## Project
 - Purpose: ${projectName} project.
 - Stack: ${stack}
 - Shape: ${shape}
-- Rules: Standard library first; atomic writes; no secret indexing.
+- DDD: mandatory; context: [Domain flow](/architecture/domain/Flow.md)
+- Head/fingerprint: ${head ?? "none"} / ${fingerprint ?? "none"}
 
-## Active
+## Now
 <!-- memory:generated:start active -->
 - Objective: [OBJ-001](/goal.md) Project goal.
-- Scope: [Project](/goal.md)
+- Active scope: [Project](/goal.md)
 - State: draft
-- Next: Complete interview.
+- Next action: Complete interview.
 - Blocker: none
 <!-- memory:generated:end active -->
 
-## Map
-- [Goal](/goal.md) — approved objectives and key results
-- [Progress](/progress.md) — current evidence and state
-- [Tasks](/tasks.md) — at most five active actions
-- [History](/log.md) — append-only decisions and work
-- [Sources](/sources/) — provenance records
+## Architecture
+- Start: [System flow](/architecture/system-design/Flow.md)
+- Domain: [Context map](/architecture/domain/Flow.md)
+- Security: [Trust flow](/architecture/security/Flow.md)
+- Route: ${activeRoute}
+- Full map: [Architecture index](/architecture/)
 
-## Scopes
+## Find
+| Need | Read |
+|---|---|
+| Approved intent | goal.md |
+| Current work/evidence | progress.md |
+| Next actions | tasks.md |
+| Code/data route | architecture/.../Flow.md |
+| Decisions/history | log.md |
+| Provenance | sources/ |
+| Full repository tree | \`memory map\` |
+
+## Active scopes
 <!-- memory:generated:start scopes -->
 - [Project](/goal.md) — active
 <!-- memory:generated:end scopes -->`);
+}
+
+function architectureIndexTemplate(layers: ArchitectureLayer[], timestamp: string): string {
+  const tableRows = layers.map((layer) => {
+    return `| ${layer} | observed | - | - | [${layer}/Flow.md](./${layer}/Flow.md) |`;
+  });
+
+  return serializeMarkdown({
+    type: "ArchitectureIndex",
+    title: "Architecture index",
+    description: "Architecture flow directory and domain boundary map.",
+    timestamp,
+    scope: ".",
+  }, `# Architecture Index
+
+## Overview
+Dynamic architecture map and flow routes across bounded contexts.
+
+## Flow map
+<!-- memory:generated:start flows -->
+| Layer | Status | Upstream | Downstream | Flow Document |
+|---|---|---|---|---|
+${tableRows.join("\n")}
+<!-- memory:generated:end flows -->
+
+## Canonical layers
+- **system-design**: Top-level system structure, entry points, and high-level routing.
+- **domain**: Ubiquitous language, bounded contexts, and business invariants.
+- **security**: Trust boundaries, security controls, and authentication policy.
+- **frontend**: Browser/client presentation, UI components, and client-side state.
+- **gateway-edge**: API gateway, proxy, routing, and ingress middleware.
+- **auth**: Identity verification, session management, and credential issuance.
+- **backend**: Application use cases, API controllers, and service orchestration.
+- **database**: Data models, schemas, persistence adapters, and migrations.
+- **cloud-observability**: Infrastructure, deployment, metrics, logs, and tracing.
+`);
+}
+
+function flowTemplate(
+  layer: ArchitectureLayer,
+  evidence?: ArchitectureEvidence,
+  deepScan?: DeepScanResult,
+  fingerprint?: string,
+  timestamp?: string,
+): string {
+  const ts = timestamp ?? nowIso();
+  const repoPaths = evidence?.paths && evidence.paths.length > 0 ? evidence.paths.slice(0, 10) : [];
+  const upstream = evidence?.upstream ?? [];
+  const downstream = evidence?.downstream ?? [];
+
+  const layerMeta: Record<ArchitectureLayer, {
+    title: string;
+    description: string;
+    responsibility: string;
+    route: string;
+    steps: Array<{ step: string; input: string; owner: string; output: string; failure: string }>;
+    context: string;
+    language: string;
+    invariants: string;
+    useCases: string;
+    ports: string;
+    dataClass: string;
+    trustBoundaries: string;
+    auth: string;
+    persistence: string;
+    failureBehavior: string;
+    telemetry: string;
+    recovery: string;
+  }> = {
+    "system-design": {
+      title: "System design flow",
+      description: "Top-level component topology, request lifecycle, and entry routing.",
+      responsibility: "Orchestrates top-level system entry points and routes requests into subsystem boundaries.",
+      route: "Client Request → Ingress / Gateway → Application Subsystems → Domain Core → Persistence / Infrastructure",
+      steps: [
+        { step: "1. Entry", input: "User / External Request", owner: "System Gateway", output: "Normalized Payload", failure: "400 Bad Request" },
+        { step: "2. Routing", input: "Normalized Payload", owner: "Route Dispatcher", output: "Subsystem Invocation", failure: "404 Not Found" },
+        { step: "3. Execution", input: "Subsystem Context", owner: "Domain / App Service", output: "Domain Result", failure: "500 Internal Error" },
+        { step: "4. Response", input: "Domain Result", owner: "Response Formatter", output: "Serialized Response", failure: "Transport Error" },
+      ],
+      context: "System root boundary and subsystem registry.",
+      language: "Entry points, Subsystems, Ingress, Router, Context Dispatcher.",
+      invariants: "All external requests must enter through recognized gateway/entry points.",
+      useCases: "Route request, dispatch commands, aggregate subsystem responses.",
+      ports: "System entry point adapters, CLI routers, HTTP gateways.",
+      dataClass: "Public perimeter payload; sanitized prior to internal dispatch.",
+      trustBoundaries: "Public untrusted perimeter → authenticated subsystem runtime.",
+      auth: "Perimeter validation and header extraction.",
+      persistence: "Subsystem-delegated.",
+      failureBehavior: "Fail-closed with sanitized error codes.",
+      telemetry: "Ingress request counter, duration histogram, panic handler logs.",
+      recovery: "Graceful process restart and health check probes.",
+    },
+    "domain": {
+      title: "Domain flow",
+      description: "Core DDD model, context boundaries, ubiquitous language, and business invariants.",
+      responsibility: "Encapsulates business rules, invariants, and ubiquitous language isolated from infrastructure concerns.",
+      route: "Application Command / Query → Domain Port → Domain Entity / Aggregate → Business Rule Evaluation → Domain Event / Result",
+      steps: [
+        { step: "1. Invariant Validation", input: "Command / Input Values", owner: "Domain Aggregate", output: "Validated Entities", failure: "Invariant Violation" },
+        { step: "2. State Transition", input: "Validated Command", owner: "Domain Model", output: "Updated State", failure: "Business Rule Error" },
+        { step: "3. Port Notification", input: "Domain Outcome", owner: "Domain Port", output: "Emitted Event / Result", failure: "Infrastructure Error" },
+      ],
+      context: "Core Business Domain (Single Bounded Context or Root Context).",
+      language: "Aggregate, Entity, Value Object, Invariant, Domain Port, Domain Event.",
+      invariants: "State transitions must maintain model invariants; no direct database mutations bypass domain logic.",
+      useCases: "Execute business transaction, apply domain rules, evaluate policies.",
+      ports: "Repository interface, Event Publisher port, Notification port.",
+      dataClass: "Domain state; internal high-integrity data.",
+      trustBoundaries: "Application service boundary → isolated domain model.",
+      auth: "Domain permission verification and policy invariants.",
+      persistence: "Decoupled domain repositories (implemented in infrastructure/database).",
+      failureBehavior: "Domain exception / invariant rejection with explicit failure reason.",
+      telemetry: "Domain event counters, business rule violation alerts.",
+      recovery: "Transaction rollback and idempotent retry.",
+    },
+    "security": {
+      title: "Security and trust flow",
+      description: "Trust boundaries, authentication policies, permission verification, and data classification.",
+      responsibility: "Enforces trust boundaries, cryptographic controls, authentication checks, and authorization policies across all routes.",
+      route: "Untrusted Input → Trust Boundary Check → Identity Verification → Permission Evaluation → Sanitized Execution",
+      steps: [
+        { step: "1. Perimeter Check", input: "Raw Request / Payload", owner: "Security Guard", output: "Sanitized Input", failure: "403 Forbidden" },
+        { step: "2. Identity Check", input: "Credentials / Token", owner: "Identity Provider", output: "Verified Subject", failure: "401 Unauthorized" },
+        { step: "3. Authorization", input: "Subject & Permission Scope", owner: "Policy Engine", output: "Access Grant", failure: "403 Forbidden" },
+      ],
+      context: "Security & Trust Boundary Context.",
+      language: "Principal, Token, Permission, Trust Boundary, Cipher, Policy Guard.",
+      invariants: "Never execute unauthenticated or unauthorized operations across trust borders; secrets must never be exposed.",
+      useCases: "Validate token, verify RBAC/ABAC permissions, enforce CSP/CORS, sanitize inputs.",
+      ports: "Policy enforcement point (PEP), Secret manager port.",
+      dataClass: "Confidential credentials, encryption keys, authorization tokens.",
+      trustBoundaries: "Untrusted boundary → Perimeter guard → Authenticated domain.",
+      auth: "Signature verification, token expiry check, revocation list check.",
+      persistence: "Encrypted key storage or external IAM / secret manager.",
+      failureBehavior: "Immediate reject (401/403) with generic error message.",
+      telemetry: "Authentication failure rate, suspicious activity alerts, audit trail log.",
+      recovery: "Session revocation, rate limiting, credential rotation.",
+    },
+    "frontend": {
+      title: "Frontend flow",
+      description: "Client presentation, user interaction, UI components, and state management.",
+      responsibility: "Manages user interface rendering, client state transitions, and asynchronous communication with backend services.",
+      route: "User Interaction → Component Event Handler → Client State Store → API Client → DOM Render",
+      steps: [
+        { step: "1. User Event", input: "DOM Interaction", owner: "UI Component", output: "Action Dispatch", failure: "Client Validation Error" },
+        { step: "2. State Mutation", input: "Action", owner: "State Store", output: "Updated Reactive State", failure: "State Sync Failure" },
+        { step: "3. Network Sync", input: "Server Request", owner: "API Client", output: "Async Response", failure: "Network / HTTP Error" },
+      ],
+      context: "Frontend Presentation & Client UI Context.",
+      language: "Component, View, Client State, Action, Hook, Render Pipeline.",
+      invariants: "UI states must remain deterministic and reflect valid underlying domain state.",
+      useCases: "Render user views, capture form input, manage client-side navigation.",
+      ports: "HTTP API client, Local storage adapter, WebSocket bridge.",
+      dataClass: "User presentation data and client session cache.",
+      trustBoundaries: "User browser environment → API gateway / edge.",
+      auth: "Client bearer token storage and refresh loop.",
+      persistence: "Browser cache, local storage, indexedDB.",
+      failureBehavior: "Visual error toast / error boundary fallback.",
+      telemetry: "Client web vitals (CWV), unhandled JS error tracking.",
+      recovery: "Optimistic UI rollback and automated reconnection.",
+    },
+    "gateway-edge": {
+      title: "Gateway and edge routing flow",
+      description: "Reverse proxy, ingress termination, rate limiting, and edge request dispatch.",
+      responsibility: "Terminates public network traffic, enforces ingress rate limits, and routes requests to appropriate downstream services.",
+      route: "Inbound HTTP Traffic → Edge TLS / Firewall → Rate Limiter → Reverse Proxy → Upstream Target",
+      steps: [
+        { step: "1. Ingress Termination", input: "Public TCP/HTTP Request", owner: "Edge Server", output: "Decrypted Request", failure: "TLS Handshake Failure" },
+        { step: "2. Rate Limiting", input: "Client IP / Token", owner: "Rate Limiter", output: "Traffic Clearance", failure: "429 Too Many Requests" },
+        { step: "3. Upstream Dispatch", input: "Cleared Request", owner: "Proxy Router", output: "Upstream Forwarding", failure: "502 Bad Gateway" },
+      ],
+      context: "Gateway & Edge Routing Context.",
+      language: "Ingress, Reverse Proxy, Upstream, Route Rule, Rate Limit, Edge Worker.",
+      invariants: "Malformed or oversized payloads must be terminated before entering internal network.",
+      useCases: "Terminate TLS, proxy upstream requests, enforce IP rate limits, route by path.",
+      ports: "HTTP Reverse Proxy, DNS resolver, CDN edge cache.",
+      dataClass: "Inbound raw HTTP stream.",
+      trustBoundaries: "Public Internet → Private VPC / backend cluster.",
+      auth: "Perimeter token inspection and API key verification.",
+      persistence: "Transient connection cache and rate limit state (Redis/KV).",
+      failureBehavior: "Standard HTTP gateway status codes (429, 502, 504).",
+      telemetry: "Edge request rates, response latency percentiles, upstream error rates.",
+      recovery: "Upstream health checking and failover to secondary endpoints.",
+    },
+    "auth": {
+      title: "Authentication flow",
+      description: "Identity verification, token issuance, session lifecycle, and credential validation.",
+      responsibility: "Authenticates principal identities, manages session tokens, and validates cryptographic credentials.",
+      route: "Credential Submission → Credential Validation → Subject Resolution → Session / Token Issuance → Authenticated Context",
+      steps: [
+        { step: "1. Credential Ingestion", input: "Login / Token Payload", owner: "Auth Controller", output: "Raw Credentials", failure: "400 Bad Request" },
+        { step: "2. Identity Verification", input: "Credentials", owner: "Identity Validator", output: "Verified Principal", failure: "401 Invalid Credentials" },
+        { step: "3. Token Issuance", input: "Verified Principal", owner: "Token Service", output: "Signed JWT / Session", failure: "Token Signing Error" },
+      ],
+      context: "Identity & Authentication Context.",
+      language: "Principal, Subject, Session, Refresh Token, Credential, Password Hash.",
+      invariants: "Passwords must be hashed using strong one-way algorithms; tokens must be cryptographically signed with short TTL.",
+      useCases: "User login, session refresh, OAuth code exchange, logout revocation.",
+      ports: "User credential repository, Hash provider, Token signer.",
+      dataClass: "Confidential credentials, password hashes, session records.",
+      trustBoundaries: "Public login endpoint → Identity verification boundary.",
+      auth: "Multi-factor authentication (MFA) and cryptographic signature checks.",
+      persistence: "User account table, Redis session store.",
+      failureBehavior: "Exponential backoff on failed attempts; timing-safe comparisons.",
+      telemetry: "Login success/failure metrics, brute-force attempt alerts.",
+      recovery: "Account recovery workflow and emergency session invalidation.",
+    },
+    "backend": {
+      title: "Backend application flow",
+      description: "HTTP controllers, application use cases, service orchestration, and domain dispatch.",
+      responsibility: "Receives transport requests, executes application use cases, coordinates transaction boundaries, and returns responses.",
+      route: "HTTP Route Match → Controller / Handler → Application Use Case → Domain Execution → DTO Serialization",
+      steps: [
+        { step: "1. Request Handling", input: "HTTP Request", owner: "Route Handler", output: "Parsed DTO", failure: "400 Bad Request" },
+        { step: "2. Use Case Execution", input: "Validated DTO", owner: "Application Service", output: "Domain Operation", failure: "Business Exception" },
+        { step: "3. Output Mapping", input: "Domain Result", owner: "Presenter / Serializer", output: "HTTP Response DTO", failure: "500 Serialization Error" },
+      ],
+      context: "Application Orchestration Context.",
+      language: "Controller, Route Handler, Application Service, Use Case, DTO, Presenter.",
+      invariants: "Controllers must not contain business logic; dependencies must point inwards toward domain.",
+      useCases: "Coordinate multi-aggregate transactions, dispatch domain commands, query read models.",
+      ports: "HTTP Server router, Domain port callers, Transaction manager.",
+      dataClass: "Application request/response DTOs.",
+      trustBoundaries: "Transport layer → Application use case layer.",
+      auth: "Route-level authorization middleware.",
+      persistence: "Transaction coordinator delegating to repository interfaces.",
+      failureBehavior: "Catch domain exceptions and map to standardized error envelopes.",
+      telemetry: "Controller execution latency, HTTP status code distribution.",
+      recovery: "Database transaction rollback and idempotent retry queues.",
+    },
+    "database": {
+      title: "Database and persistence flow",
+      description: "Entity relational mapping, query execution, migration management, and persistence adapters.",
+      responsibility: "Executes ACID persistence transactions, manages database connections, and maps database records to domain entities.",
+      route: "Domain Repository Invocation → Persistence Adapter → Query / ORM Layer → Database Engine → Hydrated Entity",
+      steps: [
+        { step: "1. Query Preparation", input: "Domain Entity / Query Criteria", owner: "Repository Adapter", output: "SQL / Query Statement", failure: "Query Build Error" },
+        { step: "2. DB Execution", input: "Query Statement", owner: "DB Driver / Pool", output: "Raw Record Set", failure: "DB Connection / Constraint Error" },
+        { step: "3. Entity Hydration", input: "Raw Record Set", owner: "Entity Mapper", output: "Hydrated Domain Model", failure: "Mapping Error" },
+      ],
+      context: "Persistence & Data Access Infrastructure Context.",
+      language: "Schema, Migration, Repository Adapter, ORM, Connection Pool, Record.",
+      invariants: "Database constraints enforce relational integrity; migrations are versioned and reversible.",
+      useCases: "Persist aggregate state, execute relational queries, manage schema migrations.",
+      ports: "Database driver connection pool, ORM mapper.",
+      dataClass: "Persistent system of record data.",
+      trustBoundaries: "Internal private network database connection.",
+      auth: "Database credential pooling with minimum required privileges.",
+      persistence: "Relational/Document database storage engine.",
+      failureBehavior: "Transaction abort, pool reconnection on connection drop.",
+      telemetry: "Query latency histograms, connection pool utilization, slow query logs.",
+      recovery: "Automated transaction retry and read-replica failover.",
+    },
+    "cloud-observability": {
+      title: "Cloud infrastructure and observability flow",
+      description: "Telemetry instrumentation, distributed tracing, structured logging, deployment, and monitoring.",
+      responsibility: "Collects runtime metrics, traces distributed operations, ships structured logs, and monitors service health.",
+      route: "Runtime Event / Trace Span → Telemetry Exporter → Ingestion Pipeline → Storage / Dashboard → Alert Rule Evaluation",
+      steps: [
+        { step: "1. Telemetry Capture", input: "Runtime Operation / Metric", owner: "Instrumentation Hook", output: "OpenTelemetry Span / Metric", failure: "Dropped Event" },
+        { step: "2. Log / Trace Export", input: "Structured Log Record", owner: "Telemetry Pipeline", output: "Batched Ingestion Payload", failure: "Export Timeout" },
+        { step: "3. Alerting", input: "Aggregated Metrics", owner: "Monitoring Engine", output: "Alert Notification", failure: "Alert Delivery Failure" },
+      ],
+      context: "Cloud Infrastructure & Telemetry Context.",
+      language: "Metric, Span, Trace, Structured Log, Prometheus, OpenTelemetry, Dashboard.",
+      invariants: "Sensitive data / PII must be redacted from all telemetry streams before export.",
+      useCases: "Export application traces, ship JSON logs, aggregate SLA/SLO metrics, trigger alert webhooks.",
+      ports: "OTel collector exporter, Log appender transport, Metrics registry.",
+      dataClass: "Operational metrics, sanitized trace context, application logs.",
+      trustBoundaries: "Application runtime → Cloud monitoring / observability backend.",
+      auth: "Telemetry collector API keys / IAM instance roles.",
+      persistence: "Time-series database and log archival buckets.",
+      failureBehavior: "Non-blocking asynchronous telemetry export (never block application critical path).",
+      telemetry: "Self-monitoring metrics: export queue depth, drop counters.",
+      recovery: "Local telemetry ring buffer on network partition.",
+    },
+  };
+
+  const meta = layerMeta[layer] ?? {
+    title: `${titleFromPath(layer)} flow`,
+    description: `Architecture flow for ${layer}.`,
+    responsibility: `Manages operations and boundaries for ${layer}.`,
+    route: "Input → Processing → Domain → Output",
+    steps: [{ step: "1. Process", input: "Input", owner: layer, output: "Output", failure: "Error" }],
+    context: `${layer} context.`,
+    language: `${layer} terms.`,
+    invariants: `Invariants for ${layer}.`,
+    useCases: `Use cases for ${layer}.`,
+    ports: "Adapters.",
+    dataClass: "Internal data.",
+    trustBoundaries: "Subsystem boundary.",
+    auth: "Authentication checks.",
+    persistence: "Persistence mechanism.",
+    failureBehavior: "Graceful error handling.",
+    telemetry: "Logs and metrics.",
+    recovery: "Recovery strategies.",
+  };
+
+  const stepsTable = [
+    "| Step | Input | Owner | Output | Failure |",
+    "|---|---|---|---|---|",
+    ...meta.steps.map((s) => `| ${s.step} | ${s.input} | ${s.owner} | ${s.output} | ${s.failure} |`),
+  ].join("\n");
+
+  const anchorsContent = repoPaths.length > 0
+    ? repoPaths.map((p) => `- [\`${p}\`](repo://${p})`).join("\n")
+    : "- No direct code anchors detected.";
+
+  let mermaidBlock = "";
+  if (layer === "system-design") {
+    mermaidBlock = `\n\`\`\`mermaid\ngraph LR\n  Client["Client / User"] --> Ingress["Ingress / Entry"]\n  Ingress --> App["App Subsystems"]\n  App --> Domain["Domain Core"]\n  Domain --> Storage["Persistence / Infrastructure"]\n\`\`\`\n`;
+  }
+
+  const body = `# ${meta.title}
+
+## Responsibility
+${meta.responsibility}
+
+## Route
+${meta.route}
+${mermaidBlock}
+## Steps
+${stepsTable}
+
+## Domain contract
+- Context: ${meta.context}
+- Language: ${meta.language}
+- Invariants: ${meta.invariants}
+- Application use cases: ${meta.useCases}
+- Domain ports: ${meta.ports}
+
+## Data & trust
+- Data classification: ${meta.dataClass}
+- Trust boundaries: ${meta.trustBoundaries}
+- Authorization: ${meta.auth}
+- Persistence: ${meta.persistence}
+
+## Failure & observability
+- Failure behavior: ${meta.failureBehavior}
+- Logs/metrics/traces: ${meta.telemetry}
+- Recovery: ${meta.recovery}
+
+## Code anchors
+<!-- memory:generated:start anchors -->
+${anchorsContent}
+<!-- memory:generated:end anchors -->
+
+## Decisions & unknowns
+- Confirmed initial baseline.`;
+
+  return serializeMarkdown({
+    type: "Flow",
+    title: meta.title,
+    description: meta.description,
+    layer,
+    scope: ".",
+    status: "observed",
+    repo_paths: repoPaths,
+    upstream,
+    downstream,
+    provenance: "observed",
+    repository_fingerprint: fingerprint ?? null,
+    timestamp: ts,
+  }, body);
 }
 
 function indexTemplate(title: string): string {
@@ -699,18 +1095,43 @@ export async function initializeBundle(
   const unmanagedAgents = await readUnmanagedAgentsContent(root);
   const changes: FileChange[] = [];
 
+  const initialScan = deepScan ? deepScan.scan : await scanRepository(root);
+  const discovery = discoverArchitectureLayers(initialScan, deepScan);
+
   const rootGoalContent = deepScan
     ? buildDeepGoalContent(".", timestamp, unmanagedAgents, deepScan)
     : goalTemplate(".", timestamp, unmanagedAgents);
 
   const rootFiles = new Map<string, string>([
-    [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head, deepScan)],
+    [join(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename(root), timestamp, head, deepScan, initialScan.fingerprint, discovery.detectedLayers)],
     [join(memoryRoot, "goal.md"), rootGoalContent],
     [join(memoryRoot, "progress.md"), progressTemplate(".", timestamp)],
     [join(memoryRoot, "tasks.md"), tasksTemplate(".", timestamp)],
     [join(memoryRoot, "log.md"), logTemplate(".", date)],
     [join(memoryRoot, "sources", "index.md"), indexTemplate("Sources")],
+    [join(memoryRoot, "architecture", "index.md"), architectureIndexTemplate(discovery.detectedLayers, timestamp)],
   ]);
+
+  // Mandatory architecture layers
+  for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
+    const evidence = discovery.layers.get(layer);
+    rootFiles.set(
+      join(memoryRoot, "architecture", layer, "Flow.md"),
+      flowTemplate(layer, evidence, deepScan, initialScan.fingerprint, timestamp),
+    );
+  }
+
+  // Detected conditional architecture layers
+  for (const layer of CONDITIONAL_ARCHITECTURE_LAYERS) {
+    if (discovery.layers.has(layer)) {
+      const evidence = discovery.layers.get(layer);
+      rootFiles.set(
+        join(memoryRoot, "architecture", layer, "Flow.md"),
+        flowTemplate(layer, evidence, deepScan, initialScan.fingerprint, timestamp),
+      );
+    }
+  }
+
   for (const [path, content] of rootFiles) changes.push({ ...(await plannedWrite(path, content, dryRun, false)), path: relativeChangePath(root, path) });
 
   const tracked = [".", ...normalizedScopes];
@@ -820,8 +1241,9 @@ export async function discoverTrackedScopes(projectRoot: string): Promise<string
 export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, options: { dryRun?: boolean; now?: Date } = {}): Promise<FileChange[]> {
   const root = resolve(projectRoot);
   const memoryRoot = bundlePath(root);
+  const archDir = join(memoryRoot, "architecture");
   const dryRun = options.dryRun ?? false;
-  await assertWritableBundleVersion(root, true);
+  await assertWritableBundleVersion(root, true, true);
   const walk = await walkMemory(memoryRoot);
   if (walk.files.length === 0) throw new Error(`Project Memory is not initialized at ${memoryRoot}`);
 
@@ -839,140 +1261,241 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
   const fallbackHead = scan?.head ?? await repositoryHead(root);
   const snapshot = dryRun ? undefined : await captureBundle(root);
 
+  const discovery = scan ? discoverArchitectureLayers(scan) : undefined;
+
   try {
     for (const directory of [...directories].sort()) {
-    const scope = scopeFromMemoryDirectory(memoryRoot, directory);
-    const indexPath = join(directory, "index.md");
-    let content = await readIfExists(indexPath);
-    if (!content) content = directory === memoryRoot
-      ? rootIndexTemplate(basename(root), nowIso(options.now), fallbackHead)
-      : indexTemplate(titleFromPath(scope));
+      const scope = scopeFromMemoryDirectory(memoryRoot, directory);
+      const isArchRoot = directory === archDir;
+      const isArchLayer = dirname(directory) === archDir;
 
-    if (directory === memoryRoot) {
-      const rootParsed = parseMarkdown(content);
-      if (!rootParsed.hasFrontmatter || rootParsed.errors.length > 0) throw new Error("Root index.md must contain valid frontmatter");
-      const activeScope = typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
-      const progressPath = join(scopeDirectory(root, activeScope), "progress.md");
-      const progress = await readIfExists(progressPath);
-      const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
-      const nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
-      const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
-      const blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
+      if (isArchLayer) {
+        const layer = basename(directory) as ArchitectureLayer;
+        const flowPath = join(directory, "Flow.md");
+        let flowContent = await readIfExists(flowPath);
+        if (flowContent) {
+          const parsedFlow = parseMarkdown(flowContent);
+          const evidence = discovery?.layers.get(layer);
+          const anchorLines = evidence && evidence.paths.length > 0
+            ? evidence.paths.slice(0, 10).map((p) => `- [\`${p}\`](repo://${p})`).join("\n")
+            : "- No direct code anchors detected.";
 
-      const goalPath = join(scopeDirectory(root, activeScope), "goal.md");
-      const goalContent = await readIfExists(goalPath);
-      const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
-      const goalStatus = goalParsed?.data.status ? String(goalParsed.data.status) : (typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft");
+          if (flowContent.includes("<!-- memory:generated:start anchors -->")) {
+            flowContent = replaceGeneratedRegion(flowContent, "anchors", anchorLines);
+          }
 
-      let objectiveId = typeof rootParsed.data.active_objective === "string" ? rootParsed.data.active_objective : "OBJ-001";
-      let objectiveTitle = "";
-      if (goalContent) {
-        const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
-        if (objMatch) {
-          objectiveId = objMatch[1];
-          objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
-        } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
-          objectiveTitle = ` ${goalParsed.data.title}`;
+          const flowValues: Record<string, unknown> = {};
+          if (scan && scan.fingerprint !== parsedFlow.data.repository_fingerprint) {
+            flowValues.repository_fingerprint = scan.fingerprint;
+            flowValues.timestamp = nowIso(options.now);
+          }
+
+          if (evidence) {
+            if (evidence.upstream && (!Array.isArray(parsedFlow.data.upstream) || parsedFlow.data.upstream.length === 0)) {
+              flowValues.upstream = evidence.upstream;
+            }
+            if (evidence.downstream && (!Array.isArray(parsedFlow.data.downstream) || parsedFlow.data.downstream.length === 0)) {
+              flowValues.downstream = evidence.downstream;
+            }
+            if (CONDITIONAL_ARCHITECTURE_LAYERS.includes(layer) && !discovery?.detectedLayers.includes(layer)) {
+              if (parsedFlow.data.status !== "stale") flowValues.status = "stale";
+            } else if (discovery?.detectedLayers.includes(layer)) {
+              const nextStatus = parsedFlow.data.status === "confirmed" ? "confirmed" : "observed";
+              if (parsedFlow.data.status !== nextStatus) flowValues.status = nextStatus;
+            }
+          }
+
+          if (Object.keys(flowValues).length > 0) {
+            flowContent = updateMarkdownFrontmatter(flowContent, flowValues);
+          }
+          const change = await plannedWrite(flowPath, flowContent, dryRun, true);
+          changes.push({ ...change, path: relativeChangePath(root, flowPath) });
+        }
+        continue;
+      }
+
+      const indexPath = join(directory, "index.md");
+      let content = await readIfExists(indexPath);
+      if (!content) {
+        if (directory === memoryRoot) {
+          content = rootIndexTemplate(basename(root), nowIso(options.now), fallbackHead, undefined, scan?.fingerprint, discovery?.detectedLayers);
+        } else if (isArchRoot) {
+          content = architectureIndexTemplate(discovery?.detectedLayers ?? [...MANDATORY_ARCHITECTURE_LAYERS], nowIso(options.now));
+        } else {
+          content = indexTemplate(titleFromPath(scope));
         }
       }
-      const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/goal.md`;
-      const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/`;
-      const scopeLabel = activeScope === "." ? "Project" : activeScope;
 
-      const activeText = `- Objective: [${objectiveId}](${goalLink})${objectiveTitle}\n- Scope: [${scopeLabel}](${scopeLink})\n- State: ${goalStatus}\n- Next: ${nextClean}\n- Blocker: ${blockerClean}`;
+      if (directory === memoryRoot) {
+        const rootParsed = parseMarkdown(content);
+        if (!rootParsed.hasFrontmatter || rootParsed.errors.length > 0) throw new Error("Root index.md must contain valid frontmatter");
+        const activeScope = typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
+        const progressPath = join(scopeDirectory(root, activeScope), "progress.md");
+        const progress = await readIfExists(progressPath);
+        const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
+        const nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
+        const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
+        const blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
 
-      if (content.includes("<!-- memory:generated:start active -->")) {
-        content = replaceGeneratedRegion(content, "active", activeText);
-      } else if (content.includes("<!-- memory:generated:start focus -->")) {
-        content = replaceGeneratedRegion(content, "focus", activeText);
+        const goalPath = join(scopeDirectory(root, activeScope), "goal.md");
+        const goalContent = await readIfExists(goalPath);
+        const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
+        const goalStatus = goalParsed?.data.status ? String(goalParsed.data.status) : (typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft");
+
+        let objectiveId = typeof rootParsed.data.active_objective === "string" ? rootParsed.data.active_objective : "OBJ-001";
+        let objectiveTitle = "";
+        if (goalContent) {
+          const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
+          if (objMatch) {
+            objectiveId = objMatch[1];
+            objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
+          } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
+            objectiveTitle = ` ${goalParsed.data.title}`;
+          }
+        }
+        const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/goal.md`;
+        const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/`;
+        const scopeLabel = activeScope === "." ? "Project" : activeScope;
+
+        const activeText = `- Objective: [${objectiveId}](${goalLink})${objectiveTitle}\n- Active scope: [${scopeLabel}](${scopeLink})\n- State: ${goalStatus}\n- Next action: ${nextClean}\n- Blocker: ${blockerClean}`;
+
+        if (content.includes("<!-- memory:generated:start active -->")) {
+          content = replaceGeneratedRegion(content, "active", activeText);
+        } else if (content.includes("<!-- memory:generated:start focus -->")) {
+          content = replaceGeneratedRegion(content, "focus", activeText);
+        }
+
+        const sortedScopes = [...scopes];
+        const activeIdx = sortedScopes.indexOf(activeScope);
+        if (activeIdx > -1) {
+          sortedScopes.splice(activeIdx, 1);
+          sortedScopes.unshift(activeScope);
+        }
+        const visibleScopes = sortedScopes.slice(0, 5);
+        const remainingCount = sortedScopes.length - visibleScopes.length;
+
+        const scopeLines: string[] = [];
+        for (const trackedScope of visibleScopes) {
+          const scopeGoalPath = join(scopeDirectory(root, trackedScope), "goal.md");
+          const metadata = await documentMetadata(scopeGoalPath);
+          const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
+          const label = trackedScope === "." ? "Project" : trackedScope;
+          const status = metadata.status ? `(${metadata.status})` : "";
+          const isActive = trackedScope === activeScope ? " — active" : "";
+          const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` — ${metadata.description}` : "";
+          scopeLines.push(`- [${label}](${target})${status ? ` ${status}` : ""}${isActive}${desc}`.replace(/\s+/g, " ").trim());
+        }
+        if (remainingCount > 0) {
+          scopeLines.push(`- ... (${remainingCount} more tracked scope(s))`);
+        }
+        if (content.includes("<!-- memory:generated:start scopes -->")) {
+          content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
+        }
+
+        if (content.includes("<!-- memory:generated:start treemap -->")) {
+          content = replaceGeneratedRegion(content, "treemap", "");
+        }
+
+        if (content.includes("<!-- memory:generated:start documents -->")) {
+          const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
+          const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
+            const metadata = await documentMetadata(file);
+            return markdownEntry(metadata.title, `/${basename(file)}`, metadata.description);
+          }));
+          content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No root documents.");
+        }
+
+        if (content.includes("<!-- memory:generated:start sources -->")) {
+          const sourceFiles = walk.files.filter((file) => dirname(file) === join(memoryRoot, "sources") && basename(file) !== "index.md");
+          const sourceLines = await Promise.all(sourceFiles.sort().map(async (file) => {
+            const metadata = await documentMetadata(file);
+            return markdownEntry(metadata.title, `/sources/${basename(file)}`, metadata.description);
+          }));
+          content = replaceGeneratedRegion(content, "sources", sourceLines.join("\n") || "- No sources registered.");
+        }
+
+        const rootUpdates: Record<string, unknown> = {};
+        if (rootParsed.data.memory_version !== MEMORY_VERSION) rootUpdates.memory_version = MEMORY_VERSION;
+        if (rootParsed.data.architecture_mode !== "ddd") rootUpdates.architecture_mode = "ddd";
+        if (rootParsed.data.architecture_index !== "/architecture/") rootUpdates.architecture_index = "/architecture/";
+        if (rootParsed.data.system_flow !== "/architecture/system-design/Flow.md") rootUpdates.system_flow = "/architecture/system-design/Flow.md";
+        if (scan && ((scan.head ?? null) !== rootParsed.data.repository_head || scan.fingerprint !== rootParsed.data.repository_fingerprint)) {
+          rootUpdates.repository_head = scan.head ?? null;
+          rootUpdates.repository_fingerprint = scan.fingerprint;
+          rootUpdates.last_scan_at = nowIso(options.now);
+          rootUpdates.timestamp = nowIso(options.now);
+        }
+        if (Object.keys(rootUpdates).length > 0) {
+          content = updateMarkdownFrontmatter(content, rootUpdates);
+        }
+      } else if (isArchRoot) {
+        const archLayers = ALL_ARCHITECTURE_LAYERS.filter((l) =>
+          walk.files.some((f) => f === join(archDir, l, "Flow.md"))
+        );
+        const flowRows: string[] = [];
+        for (const l of archLayers) {
+          const flowFile = join(archDir, l, "Flow.md");
+          const flowDoc = await readIfExists(flowFile);
+          if (flowDoc) {
+            const parsedFlow = parseMarkdown(flowDoc);
+            const status = typeof parsedFlow.data.status === "string" ? parsedFlow.data.status : "observed";
+            const up = Array.isArray(parsedFlow.data.upstream) && parsedFlow.data.upstream.length > 0
+              ? parsedFlow.data.upstream.join(", ")
+              : "none";
+            const down = Array.isArray(parsedFlow.data.downstream) && parsedFlow.data.downstream.length > 0
+              ? parsedFlow.data.downstream.join(", ")
+              : "none";
+            flowRows.push(`| ${l} | ${status} | ${up} | ${down} | [${l}/Flow.md](./${l}/Flow.md) |`);
+          }
+        }
+        if (content.includes("<!-- memory:generated:start flows -->")) {
+          content = replaceGeneratedRegion(
+            content,
+            "flows",
+            flowRows.length > 0
+              ? `| Layer | Status | Upstream | Downstream | Flow Document |\n|---|---|---|---|---|\n${flowRows.join("\n")}`
+              : "| Layer | Status | Upstream | Downstream | Flow Document |\n|---|---|---|---|---|",
+          );
+        }
+      } else {
+        if (content.includes("<!-- memory:generated:start children -->")) {
+          const childLines = directChildren(directory, directories).map((child) => {
+            const label = basename(child);
+            return markdownEntry(titleFromPath(label), `./${label}/`);
+          });
+          content = replaceGeneratedRegion(content, "children", childLines.join("\n") || "- No child directories.");
+        }
+
+        if (content.includes("<!-- memory:generated:start documents -->")) {
+          const directDocuments = walk.files.filter((file) => dirname(file) === directory && !RESERVED_FILES.has(basename(file)));
+          const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
+            const metadata = await documentMetadata(file);
+            return markdownEntry(metadata.title, `./${basename(file)}`, metadata.description);
+          }));
+          content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No documents.");
+        }
+
+        if (content.includes("<!-- memory:generated:start files -->")) {
+          const fileLines = sourceFileLines(root, indexPath, scope, scan, false);
+          content = replaceGeneratedRegion(content, "files", fileLines.join("\n") || "- No direct source files.");
+        }
+
+        if (content.includes("<!-- memory:generated:start tests -->")) {
+          const testLines = sourceFileLines(root, indexPath, scope, scan, true);
+          content = replaceGeneratedRegion(content, "tests", testLines.join("\n") || "- No direct tests.");
+        }
       }
 
-      const sortedScopes = [...scopes];
-      const activeIdx = sortedScopes.indexOf(activeScope);
-      if (activeIdx > -1) {
-        sortedScopes.splice(activeIdx, 1);
-        sortedScopes.unshift(activeScope);
-      }
-      const visibleScopes = sortedScopes.slice(0, 5);
-      const remainingCount = sortedScopes.length - visibleScopes.length;
-
-      const scopeLines: string[] = [];
-      for (const trackedScope of visibleScopes) {
-        const scopeGoalPath = join(scopeDirectory(root, trackedScope), "goal.md");
-        const metadata = await documentMetadata(scopeGoalPath);
-        const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
-        const label = trackedScope === "." ? "Project" : trackedScope;
-        const status = metadata.status ? `(${metadata.status})` : "";
-        const isActive = trackedScope === activeScope ? " — active" : "";
-        const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` — ${metadata.description}` : "";
-        scopeLines.push(`- [${label}](${target})${status ? ` ${status}` : ""}${isActive}${desc}`.replace(/\s+/g, " ").trim());
-      }
-      if (remainingCount > 0) {
-        scopeLines.push(`- ... (${remainingCount} more tracked scope(s))`);
-      }
-      if (content.includes("<!-- memory:generated:start scopes -->")) {
-        content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
+      const sourceFingerprint = scan
+        ? hashText(scan.files.filter((file) => scope === "." || file.path.startsWith(`${scope}/`)).map((file) => `${file.path}:${file.size}:${file.mtimeMs}`).join("\n"))
+        : undefined;
+      if (sourceFingerprint && directory !== memoryRoot && !isArchRoot && !isArchLayer) {
+        const marker = `<!-- memory:source-fingerprint ${sourceFingerprint} -->`;
+        content = content.replace(/<!-- memory:source-fingerprint [^>]+ -->\n?/, "");
+        content = `${content.trimEnd()}\n\n${marker}\n`;
       }
 
-      if (content.includes("<!-- memory:generated:start treemap -->")) {
-        content = replaceGeneratedRegion(content, "treemap", "");
-      }
-
-      if (content.includes("<!-- memory:generated:start documents -->")) {
-        const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
-        const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
-          const metadata = await documentMetadata(file);
-          return markdownEntry(metadata.title, `/${basename(file)}`, metadata.description);
-        }));
-        content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No root documents.");
-      }
-
-      if (content.includes("<!-- memory:generated:start sources -->")) {
-        const sourceFiles = walk.files.filter((file) => dirname(file) === join(memoryRoot, "sources") && basename(file) !== "index.md");
-        const sourceLines = await Promise.all(sourceFiles.sort().map(async (file) => {
-          const metadata = await documentMetadata(file);
-          return markdownEntry(metadata.title, `/sources/${basename(file)}`, metadata.description);
-        }));
-        content = replaceGeneratedRegion(content, "sources", sourceLines.join("\n") || "- No sources registered.");
-      }
-
-      if (scan && ((scan.head ?? null) !== rootParsed.data.repository_head || scan.fingerprint !== rootParsed.data.repository_fingerprint)) {
-        content = updateMarkdownFrontmatter(content, {
-          repository_head: scan.head ?? null,
-          repository_fingerprint: scan.fingerprint,
-          last_scan_at: nowIso(options.now),
-          timestamp: nowIso(options.now),
-        });
-      }
-    } else {
-      const childLines = directChildren(directory, directories).map((child) => {
-        const label = basename(child);
-        return markdownEntry(titleFromPath(label), `./${label}/`);
-      });
-      content = replaceGeneratedRegion(content, "children", childLines.join("\n") || "- No child directories.");
-
-      const directDocuments = walk.files.filter((file) => dirname(file) === directory && !RESERVED_FILES.has(basename(file)));
-      const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
-        const metadata = await documentMetadata(file);
-        return markdownEntry(metadata.title, `./${basename(file)}`, metadata.description);
-      }));
-      content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No documents.");
-      const fileLines = sourceFileLines(root, indexPath, scope, scan, false);
-      content = replaceGeneratedRegion(content, "files", fileLines.join("\n") || "- No direct source files.");
-      const testLines = sourceFileLines(root, indexPath, scope, scan, true);
-      content = replaceGeneratedRegion(content, "tests", testLines.join("\n") || "- No direct tests.");
-    }
-
-    const sourceFingerprint = scan
-      ? hashText(scan.files.filter((file) => scope === "." || file.path.startsWith(`${scope}/`)).map((file) => `${file.path}:${file.size}:${file.mtimeMs}`).join("\n"))
-      : undefined;
-    if (sourceFingerprint && directory !== memoryRoot) {
-      const marker = `<!-- memory:source-fingerprint ${sourceFingerprint} -->`;
-      content = content.replace(/<!-- memory:source-fingerprint [^>]+ -->\n?/, "");
-      content = `${content.trimEnd()}\n\n${marker}\n`;
-    }
-
-    const change = await plannedWrite(indexPath, content, dryRun, true);
+      const change = await plannedWrite(indexPath, content, dryRun, true);
       changes.push({ ...change, path: relativeChangePath(root, indexPath) });
     }
     return changes;
@@ -1421,11 +1944,11 @@ export interface BuildMemoryContextOptions {
   toon?: boolean;
 }
 
-export function formatMemoryContext(indexContent: string): string {
-  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient. Read the linked wiki before broad repository reads or exploration. Ask rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
+function formatMemoryContext(indexContent: string): string {
+  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient.\nRead this index first. Route through System Flow → relevant layer Flow → scope goal/progress. Apply the DDD gate before implementation.\nAsk rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources, architecture flows) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
 }
 
-export function formatMemoryBudgetError(path: string, byteLength: number, budget: number): string {
+function formatMemoryBudgetError(path: string, byteLength: number, budget: number): string {
   return `[PROJECT MEMORY ERROR]\n${path} exceeds the byte budget (${byteLength} > ${budget} bytes).\nAutomatic context injection was suppressed to prevent token budget blowup and partial truncation.\nRun \`memory compact --dry-run\` or reduce index size to restore automatic injection.`;
 }
 
@@ -1498,9 +2021,52 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
     if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "root-frontmatter", path: ".memory/index.md", message: parsed.errors.join("; ") || "Root index requires frontmatter" });
     else {
       if (parsed.data.memory_version !== MEMORY_VERSION) diagnostics.push({ severity: "error", code: "version", path: ".memory/index.md", message: `Expected memory_version ${MEMORY_VERSION}` });
+      if (parsed.data.architecture_mode !== "ddd") diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd" });
+      if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
+      if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
       declaredActiveScope = typeof parsed.data.active_scope === "string" ? parsed.data.active_scope : undefined;
       if (!declaredActiveScope) diagnostics.push({ severity: "error", code: "active-scope", path: ".memory/index.md", message: "Root index requires active_scope" });
     }
+  }
+
+  // Validate architecture index and mandatory flows
+  const archDir = join(memoryRoot, "architecture");
+  const archIndexPath = join(archDir, "index.md");
+  if (!(await exists(archIndexPath))) {
+    diagnostics.push({ severity: "error", code: "missing-architecture-index", path: ".memory/architecture/index.md", message: "Architecture index (/architecture/index.md) is required" });
+  }
+
+  for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
+    const flowPath = join(archDir, layer, "Flow.md");
+    if (!(await exists(flowPath))) {
+      diagnostics.push({ severity: "error", code: "missing-mandatory-flow", path: `.memory/architecture/${layer}/Flow.md`, message: `Mandatory architecture flow ${layer}/Flow.md is required` });
+    }
+  }
+
+  // Check architecture directory layer folders for exact Flow.md naming
+  if (await exists(archDir)) {
+    try {
+      const archEntries = await readdir(archDir, { withFileTypes: true });
+      for (const entry of archEntries) {
+        if (entry.isDirectory()) {
+          const layerDirPath = join(archDir, entry.name);
+          const flowFilePath = join(layerDirPath, "Flow.md");
+          const layerFiles = await readdir(layerDirPath);
+          if (!layerFiles.includes("Flow.md")) {
+            diagnostics.push({ severity: "error", code: "invalid-flow-file", path: `.memory/architecture/${entry.name}`, message: `Architecture layer directory '${entry.name}' must contain exact Flow.md` });
+          }
+        }
+      }
+    } catch {
+      // Readdir error handled by walk
+    }
+  }
+
+  let currentScan: RepositoryScan | undefined;
+  try {
+    currentScan = await scanRepository(root);
+  } catch {
+    // Optional scan for warning checks
   }
 
   const scopeDirectories = new Set<string>();
@@ -1542,6 +2108,69 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
     if (!reserved && !rootIndexFile) {
       if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "frontmatter", path: rel, message: parsed.errors.join("; ") || "Document requires YAML frontmatter" });
       else if (typeof parsed.data.type !== "string" || !parsed.data.type.trim()) diagnostics.push({ severity: "error", code: "type", path: rel, message: "Document frontmatter requires a non-empty type" });
+    }
+
+    // Flow.md validation
+    if (name === "Flow.md" && (rel.startsWith(".memory/architecture/") || rel.startsWith("architecture/"))) {
+      if (byteLength > WARN_DOCUMENT_BYTES) {
+        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `Flow.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
+      }
+      if (parsed.data.type !== "Flow") {
+        diagnostics.push({ severity: "error", code: "flow-type", path: rel, message: "Flow document requires type: Flow" });
+      }
+      const layer = parsed.data.layer;
+      const parentDirName = basename(dirname(path));
+      if (typeof layer !== "string" || !ALL_ARCHITECTURE_LAYERS.includes(layer as ArchitectureLayer)) {
+        diagnostics.push({ severity: "error", code: "flow-layer", path: rel, message: `Invalid architecture layer: ${String(layer)}` });
+      } else if (layer !== parentDirName) {
+        diagnostics.push({ severity: "error", code: "flow-layer-mismatch", path: rel, message: `Flow layer '${layer}' does not match directory '${parentDirName}'` });
+      }
+      if (typeof parsed.data.scope !== "string") {
+        diagnostics.push({ severity: "error", code: "flow-scope", path: rel, message: "Flow requires scope" });
+      }
+      if (typeof parsed.data.status !== "string") {
+        diagnostics.push({ severity: "error", code: "flow-status", path: rel, message: "Flow requires status" });
+      }
+      if (typeof parsed.data.provenance !== "string") {
+        diagnostics.push({ severity: "error", code: "flow-provenance", path: rel, message: "Flow requires provenance" });
+      }
+
+      // Check warnings
+      if (Array.isArray(parsed.data.upstream)) {
+        for (const up of parsed.data.upstream) {
+          if (typeof up === "string" && !ALL_ARCHITECTURE_LAYERS.includes(up as ArchitectureLayer)) {
+            diagnostics.push({ severity: "warning", code: "unknown-flow-layer", path: rel, message: `Unknown upstream layer: ${up}` });
+          }
+        }
+      }
+      if (Array.isArray(parsed.data.downstream)) {
+        for (const down of parsed.data.downstream) {
+          if (typeof down === "string" && !ALL_ARCHITECTURE_LAYERS.includes(down as ArchitectureLayer)) {
+            diagnostics.push({ severity: "warning", code: "unknown-flow-layer", path: rel, message: `Unknown downstream layer: ${down}` });
+          }
+        }
+      }
+
+      if (layer === "domain") {
+        if (/- Context:\s*$/m.test(content) || /- Invariants:\s*$/m.test(content)) {
+          diagnostics.push({ severity: "warning", code: "empty-domain-contract", path: rel, message: "Domain Flow requires non-empty context and invariants in Domain contract" });
+        }
+      }
+
+      if (Array.isArray(parsed.data.repo_paths)) {
+        for (const repoPath of parsed.data.repo_paths) {
+          if (typeof repoPath === "string") {
+            const targetPath = resolve(root, repoPath);
+            if (!(await exists(targetPath))) {
+              diagnostics.push({ severity: "warning", code: "stale-repo-path", path: rel, message: `Repository path no longer exists: ${repoPath}` });
+            }
+          }
+        }
+      }
+
+      if (currentScan && typeof parsed.data.repository_fingerprint === "string" && parsed.data.repository_fingerprint !== currentScan.fingerprint) {
+        diagnostics.push({ severity: "warning", code: "stale-flow-fingerprint", path: rel, message: "Flow fingerprint is stale; run memory sync to refresh" });
+      }
     }
 
     if (name === "goal.md") {
@@ -1646,14 +2275,140 @@ const AGENTS_START = "<!-- memory:start -->";
 const AGENTS_END = "<!-- memory:end -->";
 const AGENTS_BLOCK = `${AGENTS_START}
 Project memory lives in \`.memory/\`. Keep all documents ultra-short, compact, concise, and token-efficient.
-Before any work in \`.memory/\`, check and read \`.memory/index.md\` (or root \`index.md\`), then the matching scope's goal and progress.
-Always keep \`index.md\` and \`AGENTS.md\` updated when project requirements, scope, or memory change.
+Before any work in \`.memory/\`, check and read \`.memory/index.md\`, then route through System Flow (\`.memory/architecture/system-design/Flow.md\`) → relevant layer Flow → matching scope's goal and progress.
+Apply the mandatory DDD gate before implementation: declare bounded context, ubiquitous language, and business invariants in domain logic.
+Always keep \`index.md\`, relevant \`Flow.md\`, and \`AGENTS.md\` updated when project requirements, architecture, or scope change.
 Treat user-confirmed wants, must-not rules, and acceptance criteria as requirements.
 Ask instead of guessing when intent is missing, inferred, stale, or contradictory.
 When a source changes, integrate it into the existing wiki instead of merely indexing it.
 After meaningful work, record evidence, update progress and one next action, and append \`log.md\` using concise entries.
 Use \`memory_apply\` when available, otherwise the \`memory\` CLI, for generated regions; do not rewrite history.
 ${AGENTS_END}`;
+
+export interface MigrateResult {
+  root: string;
+  version: "0.2";
+  changes: FileChange[];
+  validation: ValidationResult;
+}
+
+export async function migrateBundle(
+  projectRoot: string,
+  options: { dryRun?: boolean; now?: Date } = {},
+): Promise<MigrateResult> {
+  const root = resolve(projectRoot);
+  const memoryRoot = bundlePath(root);
+  const dryRun = options.dryRun ?? false;
+  const date = options.now ?? new Date();
+  const timestamp = nowIso(date);
+
+  const rootIndexPath = join(memoryRoot, "index.md");
+  const rootIndexContent = await readIfExists(rootIndexPath);
+  if (!rootIndexContent) throw new Error(`Project Memory is not initialized at ${memoryRoot}`);
+
+  const initialParsed = parseMarkdown(rootIndexContent);
+  if (!initialParsed.hasFrontmatter || initialParsed.errors.length > 0) {
+    throw new Error("Root index has invalid frontmatter; repair it before migration");
+  }
+
+  // If already 0.2 and valid, validate and return
+  if (initialParsed.data.memory_version === "0.2") {
+    const val = await validateBundle(root);
+    return { root, version: "0.2", changes: [], validation: val };
+  }
+
+  // Snapshot bundle for atomic rollback
+  const snapshot = dryRun ? undefined : await captureBundle(root);
+  const changes: FileChange[] = [];
+
+  try {
+    const scan = await scanRepository(root);
+    const deepScan = await deepScanRepository(root, scan);
+    const discovery = discoverArchitectureLayers(scan, deepScan);
+
+    // 1. Create architecture index if missing
+    const archDir = join(memoryRoot, "architecture");
+    const archIndexPath = join(archDir, "index.md");
+    if (await readIfExists(archIndexPath) === undefined) {
+      const archIndexContent = architectureIndexTemplate(discovery.detectedLayers, timestamp);
+      const change = await plannedWrite(archIndexPath, archIndexContent, dryRun, false);
+      changes.push({ ...change, path: relativeChangePath(root, archIndexPath) });
+    }
+
+    // 2. Create layer flows if missing
+    for (const layer of discovery.detectedLayers) {
+      const flowPath = join(archDir, layer, "Flow.md");
+      if (await readIfExists(flowPath) === undefined) {
+        const evidence = discovery.layers.get(layer);
+        const content = flowTemplate(layer, evidence, deepScan, scan.fingerprint, timestamp);
+        const change = await plannedWrite(flowPath, content, dryRun, false);
+        changes.push({ ...change, path: relativeChangePath(root, flowPath) });
+      }
+    }
+
+    // 4. Update root index.md frontmatter and body
+    let updatedRootIndex = rootIndexContent;
+    updatedRootIndex = updateMarkdownFrontmatter(updatedRootIndex, {
+      memory_version: "0.2",
+      architecture_mode: "ddd",
+      architecture_index: "/architecture/",
+      system_flow: "/architecture/system-design/Flow.md",
+      repository_head: scan.head ?? null,
+      repository_fingerprint: scan.fingerprint,
+      last_scan_at: timestamp,
+      timestamp,
+    });
+
+    const routeOrder: ArchitectureLayer[] = ["frontend", "gateway-edge", "auth", "backend", "domain", "database"];
+    const activeRoute = routeOrder
+      .filter((l) => discovery.detectedLayers.includes(l))
+      .map((l) => titleFromPath(l))
+      .join(" → ") || "Domain";
+
+    if (!updatedRootIndex.includes("## Architecture")) {
+      const archSection = `\n## Architecture\n- Start: [System flow](/architecture/system-design/Flow.md)\n- Domain: [Context map](/architecture/domain/Flow.md)\n- Security: [Trust flow](/architecture/security/Flow.md)\n- Route: ${activeRoute}\n- Full map: [Architecture index](/architecture/)\n`;
+      if (updatedRootIndex.includes("## Find")) {
+        updatedRootIndex = updatedRootIndex.replace("## Find", `${archSection}\n## Find`);
+      } else if (updatedRootIndex.includes("## Map")) {
+        updatedRootIndex = updatedRootIndex.replace("## Map", `${archSection}\n## Find\n| Need | Read |\n|---|---|\n| Approved intent | goal.md |\n| Current work/evidence | progress.md |\n| Next actions | tasks.md |\n| Code/data route | architecture/.../Flow.md |\n| Decisions/history | log.md |\n| Provenance | sources/ |\n| Full repository tree | \`memory map\` |\n`);
+      } else if (updatedRootIndex.includes("## Scopes")) {
+        updatedRootIndex = updatedRootIndex.replace("## Scopes", `${archSection}\n## Scopes`);
+      } else {
+        updatedRootIndex += archSection;
+      }
+    }
+
+    const rootChange = await plannedWrite(rootIndexPath, updatedRootIndex, dryRun, true);
+    changes.push({ ...rootChange, path: relativeChangePath(root, rootIndexPath) });
+
+    // 5. Run syncIndexes
+    const syncChanges = await syncIndexes(root, scan, { dryRun, now: date });
+    changes.push(...syncChanges);
+
+    // 6. Sync AGENTS.md
+    const agentsChange = await syncAgentsFile(root, { dryRun });
+    changes.push(agentsChange);
+
+    // 7. Validate bundle
+    const validation = dryRun
+      ? { ok: true, diagnostics: [], counts: { documents: 0, scopes: 0, sources: 0, errors: 0, warnings: 0 } }
+      : await validateBundle(root);
+
+    if (!validation.ok) {
+      throw new Error(`Migration produced invalid bundle: ${validation.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.path ?? "bundle"}: ${d.message}`).join("; ")}`);
+    }
+
+    return {
+      root,
+      version: "0.2",
+      changes,
+      validation,
+    };
+  } catch (error) {
+    if (snapshot) await restoreBundle(root, snapshot);
+    throw error;
+  }
+}
 
 export async function readUnmanagedAgentsContent(projectRoot: string): Promise<string | undefined> {
   const path = resolve(projectRoot, "AGENTS.md");

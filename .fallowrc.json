@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "bin/cli.js",
+    "bin/install.js",
+    "src/index.js",
+    "project-memory/src/cli.ts",
+    "project-memory/extensions/memory.ts",
+    "project-memory/scripts/*.mjs"
+  ],
+  "ignorePatterns": [
+    "project-memory/tests/fixtures/**",
+    "project-memory/skills/memory/scripts/memory.mjs"
+  ]
+}

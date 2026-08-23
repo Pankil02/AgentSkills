@@ -9,6 +9,7 @@ import {
   generateMemoryMap,
   getMemoryStatus,
   initializeBundle,
+  migrateBundle,
   parseMarkdown,
   recordEvent,
   refreshRegisteredSources,
@@ -48,6 +49,7 @@ Usage:
   scan                 Inspect repository files and propose tracked scopes
   init                 Create .memory and optional tracked scopes (deep scan by default)
   scaffold             Add one or more tracked scopes
+  migrate              Safely upgrade legacy Project Memory bundles to 0.2
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
   context              Emit the exact context agents should receive
@@ -245,6 +247,11 @@ export async function runCli(argv: string[], io: CliIO = {
         const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);
         result = { ...initialized, candidates: scan.candidates };
+        break;
+      }
+      case "migrate": {
+        const mutate = () => migrateBundle(root, { dryRun });
+        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
         break;
       }
       case "sync": {

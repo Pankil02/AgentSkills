@@ -9,6 +9,7 @@ import {
   changedRepositoryPaths,
   createPinnedLookup,
   deepScanRepository,
+  discoverArchitectureLayers,
   fingerprintSource,
   inventoryRepository,
   isSecretLike,
@@ -151,4 +152,34 @@ test("deepScanRepository inspects codebase structure, manifests, and architectur
   assert.deepEqual(deep.environment.envVariables, ["API_KEY", "DATABASE_URL"]);
   assert(deep.architecture.packages.some((pkg: { path: string }) => pkg.path === "apps/api"));
 });
+
+test("discoverArchitectureLayers identifies mandatory and conditional layers with upstream/downstream flows", async (t) => {
+  const root = await fixtureProject();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFile(join(root, "package.json"), JSON.stringify({
+    name: "fullstack-app",
+    dependencies: { react: "^18.0.0", express: "^4.18.0", pg: "^8.11.0" },
+  }));
+
+  const scan = await scanRepository(root);
+  const deep = await deepScanRepository(root, scan);
+  const discovery = discoverArchitectureLayers(scan, deep);
+
+  // Mandatory layers
+  assert.ok(discovery.detectedLayers.includes("system-design"));
+  assert.ok(discovery.detectedLayers.includes("domain"));
+  assert.ok(discovery.detectedLayers.includes("security"));
+
+  // Detected conditional layers based on package dependencies and files
+  assert.ok(discovery.detectedLayers.includes("frontend"));
+  assert.ok(discovery.detectedLayers.includes("backend"));
+  assert.ok(discovery.detectedLayers.includes("database"));
+
+  // Check upstream / downstream on backend
+  const backendEvidence = discovery.layers.get("backend");
+  assert.ok(backendEvidence);
+  assert.ok(backendEvidence.downstream?.includes("domain"));
+});
+
 

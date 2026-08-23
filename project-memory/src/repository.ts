@@ -154,6 +154,51 @@ export interface ScopeCandidate {
   reasons: string[];
 }
 
+export type ArchitectureLayer =
+  | "system-design"
+  | "domain"
+  | "security"
+  | "frontend"
+  | "gateway-edge"
+  | "auth"
+  | "backend"
+  | "database"
+  | "cloud-observability";
+
+export const MANDATORY_ARCHITECTURE_LAYERS: readonly ArchitectureLayer[] = [
+  "system-design",
+  "domain",
+  "security",
+] as const;
+
+export const CONDITIONAL_ARCHITECTURE_LAYERS: readonly ArchitectureLayer[] = [
+  "frontend",
+  "gateway-edge",
+  "auth",
+  "backend",
+  "database",
+  "cloud-observability",
+] as const;
+
+export const ALL_ARCHITECTURE_LAYERS: readonly ArchitectureLayer[] = [
+  ...MANDATORY_ARCHITECTURE_LAYERS,
+  ...CONDITIONAL_ARCHITECTURE_LAYERS,
+] as const;
+
+export interface ArchitectureEvidence {
+  layer: ArchitectureLayer;
+  paths: string[];
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+  upstream?: ArchitectureLayer[];
+  downstream?: ArchitectureLayer[];
+}
+
+export interface ArchitectureDiscoveryResult {
+  layers: Map<ArchitectureLayer, ArchitectureEvidence>;
+  detectedLayers: ArchitectureLayer[];
+}
+
 export interface RepositoryScan {
   projectRoot: string;
   git: boolean;
@@ -265,7 +310,7 @@ async function fallbackWalk(root: string, current = root, output: string[] = [])
   return output;
 }
 
-export async function listRepositoryPaths(root: string): Promise<string[]> {
+async function listRepositoryPaths(root: string): Promise<string[]> {
   const gitOutput = await git(root, ["ls-files", "-co", "--exclude-standard", "-z"]);
   const paths = gitOutput !== undefined
     ? gitOutput.split("\0").filter(Boolean).map(normalizeRelative)
@@ -332,7 +377,7 @@ function candidateDirectories(files: RepositoryFile[]): Map<string, { reasons: S
   return candidates;
 }
 
-export function discoverScopeCandidates(files: RepositoryFile[]): ScopeCandidate[] {
+function discoverScopeCandidates(files: RepositoryFile[]): ScopeCandidate[] {
   const candidates = candidateDirectories(files);
   const rawList = [...candidates.entries()]
     .map(([path, value]) => {
@@ -545,7 +590,7 @@ export async function repositoryHead(root: string): Promise<string | undefined> 
   return git(root, ["rev-parse", "HEAD"]);
 }
 
-export async function isGitRepository(root: string): Promise<boolean> {
+async function isGitRepository(root: string): Promise<boolean> {
   return await git(root, ["rev-parse", "--is-inside-work-tree"]) === "true";
 }
 
@@ -1035,6 +1080,316 @@ export function generateTreemapContent(scan: RepositoryScan, deepScan?: DeepScan
   renderChildren(rootNode, "");
   lines.push("```");
   return lines.join("\n");
+}
+
+export function discoverArchitectureLayers(
+  scan: RepositoryScan,
+  deepScan?: DeepScanResult,
+): ArchitectureDiscoveryResult {
+  const filePaths = scan.files.map((file) => file.path);
+  const pathSet = new Set(filePaths);
+  const detected = new Map<ArchitectureLayer, ArchitectureEvidence>();
+
+  const mainDeps = new Set(deepScan?.dependencies.main ?? []);
+  const devDeps = new Set(deepScan?.dependencies.dev ?? []);
+  const allDeps = new Set([...mainDeps, ...devDeps]);
+  const frameworks = new Set(deepScan?.techStack.frameworks ?? []);
+
+  // Helper to filter and prioritize non-test, safe paths
+  const pickLayerPaths = (filterFn: (path: string) => boolean, limit = 10): string[] => {
+    const matched = filePaths.filter((p) => !isTestFilePath(p) && !isSecretLike(p) && filterFn(p));
+    if (matched.length <= limit) return matched;
+    // Prefer shorter paths (higher-level entry points)
+    return matched.sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b)).slice(0, limit);
+  };
+
+  // 1. FRONTEND detection
+  const frontendPaths = pickLayerPaths((p) =>
+    /(?:^|\/)(?:components|views|ui|app\/(?:page|layout)|pages|src\/pages|src\/components|frontend|web|client|renderer)\//i.test(p) ||
+    /\.(?:vue|svelte|jsx|tsx|html)$/i.test(p) ||
+    /(?:^|\/)(?:index\.html|tailwind\.config\.[a-z]+|postcss\.config\.[a-z]+)$/i.test(p),
+  );
+  const frontendFrameworks = ["React", "Vue", "Svelte", "Next.js", "Nuxt", "Remix", "Astro", "TailwindCSS"];
+  const hasFrontendFramework = frontendFrameworks.some((f) => frameworks.has(f));
+  const hasFrontendDeps = ["react", "vue", "svelte", "@sveltejs/kit", "next", "nuxt", "astro", "@remix-run/react", "tailwindcss", "solid-js", "alpinejs"].some((d) => allDeps.has(d));
+  if (hasFrontendFramework || hasFrontendDeps || (deepScan && deepScan.architecture.uiComponents.length > 0) || frontendPaths.length >= 2) {
+    const reasons: string[] = [];
+    if (hasFrontendFramework) reasons.push(`Frontend framework detected: ${[...frameworks].filter((f) => frontendFrameworks.includes(f)).join(", ")}`);
+    if (hasFrontendDeps && !hasFrontendFramework) reasons.push("Frontend dependencies present");
+    if (deepScan && deepScan.architecture.uiComponents.length > 0) reasons.push(`${deepScan.architecture.uiComponents.length} UI component(s) found`);
+    if (frontendPaths.length > 0) reasons.push(`${frontendPaths.length} frontend path(s) identified`);
+    detected.set("frontend", {
+      layer: "frontend",
+      paths: frontendPaths,
+      confidence: hasFrontendFramework || (deepScan && deepScan.architecture.uiComponents.length >= 2) ? "high" : frontendPaths.length >= 2 ? "medium" : "low",
+      reasons,
+    });
+  }
+
+  // 2. GATEWAY-EDGE detection
+  const gatewayPaths = pickLayerPaths((p) =>
+    /(?:^|\/)(?:middleware|proxy|gateway|ingress|edge|routes\/edge|api\/edge)\b/i.test(p) ||
+    /(?:^|\/)(?:middleware\.(?:ts|js|mjs)|_middleware\.(?:ts|js)|nginx\.conf|caddyfile|haproxy\.cfg)$/i.test(p),
+  );
+  const gatewayDeps = ["@cloudflare/workers-types", "http-proxy", "http-proxy-middleware", "cors", "helmet", "express-rate-limit"].some((d) => allDeps.has(d));
+  if (gatewayPaths.length > 0 || gatewayDeps) {
+    const reasons: string[] = [];
+    if (gatewayPaths.length > 0) reasons.push(`${gatewayPaths.length} edge/middleware/proxy path(s) found`);
+    if (gatewayDeps) reasons.push("Edge/gateway/proxy dependencies found");
+    detected.set("gateway-edge", {
+      layer: "gateway-edge",
+      paths: gatewayPaths,
+      confidence: gatewayPaths.length >= 2 ? "high" : gatewayPaths.length === 1 || gatewayDeps ? "medium" : "low",
+      reasons,
+    });
+  }
+
+  // 3. AUTH detection
+  const authPaths = pickLayerPaths((p) =>
+    /(?:^|\/)(?:auth|session|sessions|identity|iam|oauth|tokens?|passport|jwt|cognito|clerk|lucia)\//i.test(p) ||
+    /(?:^|\/)(?:auth\.[a-z]+|session\.[a-z]+|jwt\.[a-z]+|passport\.[a-z]+|oauth\.[a-z]+)$/i.test(p),
+  );
+  const authDeps = [
+    "next-auth",
+    "@auth/core",
+    "@clerk/nextjs",
+    "@clerk/clerk-sdk-node",
+    "passport",
+    "jsonwebtoken",
+    "jose",
+    "bcrypt",
+    "bcryptjs",
+    "argon2",
+    "lucia",
+    "firebase-admin",
+    "@supabase/auth-helpers-nextjs",
+    "@supabase/supabase-js",
+    "auth0",
+  ].some((d) => allDeps.has(d));
+  if (authPaths.length > 0 || authDeps) {
+    const reasons: string[] = [];
+    if (authDeps) reasons.push("Authentication / identity dependencies detected");
+    if (authPaths.length > 0) reasons.push(`${authPaths.length} auth/session path(s) found`);
+    detected.set("auth", {
+      layer: "auth",
+      paths: authPaths,
+      confidence: authDeps || authPaths.length >= 2 ? "high" : "medium",
+      reasons,
+    });
+  }
+
+  // 4. BACKEND detection
+  const backendPaths = pickLayerPaths((p) => {
+    if (authPaths.includes(p) || gatewayPaths.includes(p)) return false;
+    return (
+      /(?:^|\/)(?:api|routes|controllers|handlers|endpoints|services|server|backend)\//i.test(p) ||
+      /(?:^|\/)(?:server\.[a-z]+|app\.[a-z]+|main\.[a-z]+|index\.[a-z]+)$/i.test(p)
+    );
+  });
+  const backendFrameworks = ["Express", "Fastify", "NestJS", "Hono", "Django", "FastAPI", "Flask"];
+  const hasBackendFramework = backendFrameworks.some((f) => frameworks.has(f));
+  const hasBackendDeps = ["express", "fastify", "@nestjs/core", "hono", "koa", "hapi", "django", "fastapi", "flask", "actix-web", "axum", "gin"].some((d) => allDeps.has(d));
+  const hasApiRoutes = deepScan ? deepScan.architecture.apiRoutes.length > 0 : false;
+  const hasApiPaths = backendPaths.some((p) => /(?:^|\/)(?:api|server|backend|controllers|routes)\//i.test(p));
+  if (hasBackendFramework || hasBackendDeps || hasApiRoutes || (backendPaths.length >= 2 && hasApiPaths) || (backendPaths.length >= 2 && !detected.has("frontend"))) {
+    const reasons: string[] = [];
+    if (hasBackendFramework) reasons.push(`Backend framework detected: ${[...frameworks].filter((f) => backendFrameworks.includes(f)).join(", ")}`);
+    if (hasBackendDeps && !hasBackendFramework) reasons.push("Backend server dependencies present");
+    if (hasApiRoutes) reasons.push(`${deepScan?.architecture.apiRoutes.length} API route handler(s) found`);
+    if (backendPaths.length > 0) reasons.push(`${backendPaths.length} server/controller path(s) found`);
+    detected.set("backend", {
+      layer: "backend",
+      paths: backendPaths,
+      confidence: hasBackendFramework || (deepScan && deepScan.architecture.apiRoutes.length >= 2) ? "high" : "medium",
+      reasons,
+    });
+  }
+
+  // 5. DATABASE detection
+  const databasePaths = pickLayerPaths((p) =>
+    /(?:schema\.prisma|drizzle\.config|[.-]drizzle|\bmigrations?\b|\bmodels?\b|\bentities\b|\bqueries\b|\brepositories\b|db\/(?:schema|migrations?|models?)|database)\//i.test(p) ||
+    /\.(?:sql|prisma)$/i.test(p) ||
+    /(?:^|\/)(?:schema\.[a-z]+|knexfile\.[a-z]+|ormconfig\.[a-z]+)$/i.test(p),
+  );
+  const databaseFrameworks = ["Prisma", "Drizzle ORM", "TypeORM", "Mongoose", "SQLAlchemy"];
+  const hasDatabaseFramework = databaseFrameworks.some((f) => frameworks.has(f));
+  const hasDatabaseDeps = ["@prisma/client", "drizzle-orm", "typeorm", "mongoose", "pg", "mysql2", "sqlite3", "better-sqlite3", "mongodb", "redis", "ioredis", "knex", "sequelize"].some((d) => allDeps.has(d));
+  const hasDatabaseSchemas = deepScan ? deepScan.architecture.databaseSchemas.length > 0 : false;
+  if (hasDatabaseFramework || hasDatabaseDeps || hasDatabaseSchemas || databasePaths.length > 0) {
+    const reasons: string[] = [];
+    if (hasDatabaseFramework) reasons.push(`Database/ORM framework detected: ${[...frameworks].filter((f) => databaseFrameworks.includes(f)).join(", ")}`);
+    if (hasDatabaseDeps && !hasDatabaseFramework) reasons.push("Database client/ORM dependencies present");
+    if (hasDatabaseSchemas) reasons.push(`${deepScan?.architecture.databaseSchemas.length} database schema/model(s) found`);
+    if (databasePaths.length > 0) reasons.push(`${databasePaths.length} database/migration path(s) found`);
+    detected.set("database", {
+      layer: "database",
+      paths: databasePaths,
+      confidence: hasDatabaseFramework || hasDatabaseSchemas || databasePaths.length >= 2 ? "high" : "medium",
+      reasons,
+    });
+  }
+
+  // 6. CLOUD-OBSERVABILITY detection
+  const cloudPaths = pickLayerPaths((p) =>
+    /(?:^|\/)(?:dockerfile|docker-compose.*|fly\.toml|render\.yaml|vercel\.json|netlify\.toml|serverless\.yml|terraform.*|\.tf|k8s\/|helm\/|cdk\.[a-z]+|\.github\/workflows\/)/i.test(p) ||
+    /(?:^|\/)(?:otel|sentry|datadog|prometheus|grafana|telemetry|logging|logger\.[a-z]+|metrics\.[a-z]+|tracer\.[a-z]+)/i.test(p),
+  );
+  const cloudDeps = ["@opentelemetry/api", "@opentelemetry/sdk-node", "winston", "pino", "morgan", "sentry", "@sentry/node", "@sentry/react", "@sentry/nextjs", "prom-client", "dd-trace"].some((d) => allDeps.has(d));
+  const hasInfra = deepScan ? deepScan.environment.infrastructure.length > 0 : false;
+  if (cloudPaths.length > 0 || cloudDeps || hasInfra) {
+    const reasons: string[] = [];
+    if (hasInfra) reasons.push(`${deepScan?.environment.infrastructure.length} infrastructure file(s) found`);
+    if (cloudDeps) reasons.push("Observability / telemetry / logging dependencies found");
+    if (cloudPaths.length > 0) reasons.push(`${cloudPaths.length} cloud / deployment / monitoring path(s) found`);
+    detected.set("cloud-observability", {
+      layer: "cloud-observability",
+      paths: cloudPaths,
+      confidence: hasInfra || cloudPaths.length >= 2 ? "high" : "medium",
+      reasons,
+    });
+  }
+
+  // 7. DOMAIN (Mandatory)
+  const domainPaths = pickLayerPaths((p) => {
+    if (authPaths.includes(p) || databasePaths.includes(p) || gatewayPaths.includes(p)) return false;
+    return /(?:^|\/)(?:domain|domains|entities|aggregates|value-objects|invariants|policies|core|business)\//i.test(p) ||
+      (deepScan ? deepScan.architecture.domainTypes.includes(p) : false) ||
+      /(?:^|\/)(?:types|interfaces|schemas|dto)\//i.test(p);
+  });
+  const domainFallbackPaths = domainPaths.length > 0
+    ? domainPaths
+    : pickLayerPaths((p) => p.startsWith("src/") || p.startsWith("lib/"), 5);
+  detected.set("domain", {
+    layer: "domain",
+    paths: domainFallbackPaths,
+    confidence: domainPaths.length >= 2 ? "high" : domainPaths.length === 1 ? "medium" : "low",
+    reasons: domainPaths.length > 0
+      ? [`${domainPaths.length} domain / entity / type path(s) found`]
+      : ["Mandatory DDD domain model & context map layer"],
+  });
+
+  // 8. SECURITY (Mandatory)
+  const securityPaths = pickLayerPaths((p) => {
+    if (authPaths.includes(p)) return false;
+    return /(?:^|\/)(?:security|policy|policies|permission|permissions|cors|csp|crypto|guards?|acl|firewall|sanitiz(?:e|er))\b/i.test(p);
+  });
+  detected.set("security", {
+    layer: "security",
+    paths: securityPaths.length > 0 ? securityPaths : pickLayerPaths((p) => /(?:^|\/)(?:agents\.md|package\.json|tsconfig\.json)$/i.test(p), 3),
+    confidence: securityPaths.length >= 2 ? "high" : securityPaths.length === 1 ? "medium" : "low",
+    reasons: securityPaths.length > 0
+      ? [`${securityPaths.length} security / policy / permission path(s) found`]
+      : ["Mandatory trust boundaries & security architecture layer"],
+  });
+
+  // 9. SYSTEM-DESIGN (Mandatory)
+  const systemDesignPaths = pickLayerPaths((p) =>
+    /(?:^|\/)(?:package\.json|tsconfig\.json|agents\.md|readme\.md|dockerfile|turbo\.json|nx\.json|lerna\.json)$/i.test(p) ||
+    (deepScan ? deepScan.architecture.entryPoints.includes(p) : false),
+  );
+  detected.set("system-design", {
+    layer: "system-design",
+    paths: systemDesignPaths,
+    confidence: "high",
+    reasons: ["Mandatory top-level system design & component routing layer"],
+  });
+
+  // Resolve upstream and downstream links based on detected layers
+  const has = (layer: ArchitectureLayer) => detected.has(layer);
+
+  // system-design
+  detected.get("system-design")!.upstream = [];
+  const systemDownstream: ArchitectureLayer[] = [];
+  if (has("frontend")) systemDownstream.push("frontend");
+  else if (has("gateway-edge")) systemDownstream.push("gateway-edge");
+  else if (has("auth")) systemDownstream.push("auth");
+  else if (has("backend")) systemDownstream.push("backend");
+  else systemDownstream.push("domain");
+  detected.get("system-design")!.downstream = systemDownstream;
+
+  // frontend
+  if (has("frontend")) {
+    detected.get("frontend")!.upstream = has("gateway-edge") ? ["gateway-edge"] : ["system-design"];
+    const down: ArchitectureLayer[] = [];
+    if (has("gateway-edge")) down.push("gateway-edge");
+    else if (has("auth")) down.push("auth");
+    else if (has("backend")) down.push("backend");
+    else down.push("domain");
+    detected.get("frontend")!.downstream = [...new Set(down)];
+  }
+
+  // gateway-edge
+  if (has("gateway-edge")) {
+    detected.get("gateway-edge")!.upstream = has("frontend") ? ["frontend"] : ["system-design"];
+    const down: ArchitectureLayer[] = [];
+    if (has("auth")) down.push("auth");
+    if (has("backend")) down.push("backend");
+    if (down.length === 0) down.push("domain");
+    detected.get("gateway-edge")!.downstream = down;
+  }
+
+  // auth
+  if (has("auth")) {
+    const up: ArchitectureLayer[] = [];
+    if (has("gateway-edge")) up.push("gateway-edge");
+    else if (has("frontend")) up.push("frontend");
+    else up.push("system-design");
+    detected.get("auth")!.upstream = up;
+    detected.get("auth")!.downstream = has("backend") ? ["backend"] : ["domain"];
+  }
+
+  // backend
+  if (has("backend")) {
+    const up: ArchitectureLayer[] = [];
+    if (has("auth")) up.push("auth");
+    if (has("gateway-edge")) up.push("gateway-edge");
+    if (has("frontend") && up.length === 0) up.push("frontend");
+    if (up.length === 0) up.push("system-design");
+    detected.get("backend")!.upstream = [...new Set(up)];
+    detected.get("backend")!.downstream = ["domain"];
+  }
+
+  // domain
+  const domainUp: ArchitectureLayer[] = [];
+  if (has("backend")) domainUp.push("backend");
+  else if (has("auth")) domainUp.push("auth");
+  else if (has("gateway-edge")) domainUp.push("gateway-edge");
+  else if (has("frontend")) domainUp.push("frontend");
+  else domainUp.push("system-design");
+  detected.get("domain")!.upstream = [...new Set(domainUp)];
+  detected.get("domain")!.downstream = has("database") ? ["database"] : [];
+
+  // database
+  if (has("database")) {
+    const up: ArchitectureLayer[] = ["domain"];
+    if (has("backend")) up.push("backend");
+    detected.get("database")!.upstream = up;
+    detected.get("database")!.downstream = [];
+  }
+
+  // security
+  const secUp: ArchitectureLayer[] = [];
+  if (has("gateway-edge")) secUp.push("gateway-edge");
+  if (has("auth")) secUp.push("auth");
+  if (secUp.length === 0) secUp.push("system-design");
+  detected.get("security")!.upstream = secUp;
+  const secDown: ArchitectureLayer[] = [];
+  if (has("domain")) secDown.push("domain");
+  if (has("backend")) secDown.push("backend");
+  detected.get("security")!.downstream = secDown;
+
+  // cloud-observability
+  if (has("cloud-observability")) {
+    detected.get("cloud-observability")!.upstream = [];
+    detected.get("cloud-observability")!.downstream = [];
+  }
+
+  const detectedLayers: ArchitectureLayer[] = ALL_ARCHITECTURE_LAYERS.filter((l) => detected.has(l));
+
+  return {
+    layers: detected,
+    detectedLayers,
+  };
 }
 
 

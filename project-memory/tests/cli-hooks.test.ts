@@ -240,6 +240,101 @@ test("Antigravity notices repeated edits to an already dirty Git file", async (t
   assert.equal(((await runHook("post-invocation", { ...input, invocationNum: 1 })).injectSteps as unknown[]).length, 1);
 });
 
+test("CLI migrate command upgrades legacy 0.1 bundle to 0.2", async (t) => {
+  const root = await temporaryProject();
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(root, ".memory", "sources"), { recursive: true });
+  await writeFile(join(root, ".memory", "index.md"), `---
+memory_version: "0.1"
+project: LegacyApp
+summary: Legacy app
+active_scope: .
+active_objective: OBJ-001
+status: draft
+title: LegacyApp Project Memory
+description: Executive memory capsule.
+timestamp: 2026-01-01T00:00:00Z
+repository_head: null
+repository_fingerprint: null
+last_scan_at: null
+---
+# Project Memory
+
+## Project
+- Purpose: Legacy
+
+## Active
+<!-- memory:generated:start active -->
+- Objective: [OBJ-001](/goal.md)
+<!-- memory:generated:end active -->
+
+## Map
+- [Goal](/goal.md)
+- [Progress](/progress.md)
+- [Tasks](/tasks.md)
+- [History](/log.md)
+- [Sources](/sources/)
+
+## Scopes
+<!-- memory:generated:start scopes -->
+- [Project](/goal.md) — active
+<!-- memory:generated:end scopes -->
+`);
+
+  await writeFile(join(root, ".memory", "goal.md"), `---
+type: Goal
+title: Goal
+description: Goal
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+status: draft
+provenance: observed
+uid: 00000000-0000-0000-0000-000000000001
+---
+# Goal
+`);
+  await writeFile(join(root, ".memory", "progress.md"), `---
+type: Progress
+title: Progress
+description: Progress
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Progress
+`);
+  await writeFile(join(root, ".memory", "tasks.md"), `---
+type: Tasks
+title: Tasks
+description: Tasks
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Tasks
+`);
+  await writeFile(join(root, ".memory", "log.md"), `# Log\n`);
+  await writeFile(join(root, ".memory", "sources", "index.md"), `# Sources\n`);
+
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (text: string) => output.push(text), stderr: (text: string) => errors.push(text) };
+
+  // Dry run
+  assert.equal(await runCli(["migrate", "--dry-run", "--root", root, "--json"], io), 0, errors.join("\n"));
+  const dryResult = JSON.parse(output.pop()!);
+  assert.equal(dryResult.version, "0.2");
+
+  // Real migration
+  assert.equal(await runCli(["migrate", "--root", root, "--json"], io), 0, errors.join("\n"));
+  const migResult = JSON.parse(output.pop()!);
+  assert.equal(migResult.version, "0.2");
+  assert.equal(migResult.validation.ok, true);
+
+  // Validate
+  assert.equal(await runCli(["validate", "--root", root, "--json"], io), 0, errors.join("\n"));
+  assert.equal(JSON.parse(output.pop()!).ok, true);
+});
+
 test("built CLI is a standalone executable after build output exists", async () => {
   const built = join(packageRoot, "skills", "memory", "scripts", "memory.mjs");
   const firstLine = (await readFile(built, "utf8")).split("\n", 1)[0];

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import {
   checkCompletionReadiness,
   generateMemoryMap,
   initializeBundle,
+  migrateBundle,
   parseMarkdown,
   readUnmanagedAgentsContent,
   refreshRegisteredSources,
@@ -172,7 +173,7 @@ test("newer format versions are readable as diagnostics but blocked from mutatio
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
   const indexPath = join(root, ".memory", "index.md");
-  const newer = updateMarkdownFrontmatter(await readFile(indexPath, "utf8"), { memory_version: "0.2" });
+  const newer = updateMarkdownFrontmatter(await readFile(indexPath, "utf8"), { memory_version: "0.3" });
   await writeFile(indexPath, newer);
   const validation = await validateBundle(root);
   assert.equal(validation.ok, false);
@@ -192,7 +193,7 @@ test("partial bundles rebuild missing indexes without changing valid documents",
   await rm(join(root, ".memory", "src", "index.md"));
   await syncIndexes(root);
   assert.equal(await readFile(customPath, "utf8"), custom);
-  assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.1"/);
+  assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.2"/);
   assert.equal((await validateBundle(root)).ok, true);
 });
 
@@ -490,9 +491,10 @@ test("initializeBundle creates executive root index capsule and provides treemap
   await initializeBundle(root);
   const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
   assert.match(rootIndex, /## Project/);
-  assert.match(rootIndex, /## Active/);
-  assert.match(rootIndex, /## Map/);
-  assert.match(rootIndex, /## Scopes/);
+  assert.match(rootIndex, /## Now/);
+  assert.match(rootIndex, /## Architecture/);
+  assert.match(rootIndex, /## Find/);
+  assert.match(rootIndex, /## Active scopes/);
   assert.doesNotMatch(rootIndex, /## Codebase structure/);
 
   const treemap = await generateMemoryMap(root);
@@ -587,5 +589,169 @@ test("large repository with 100 tracked scopes produces bounded root index <= 6,
   assert.match(treemap, /pkg-000/);
   assert.match(treemap, /pkg-099/);
 });
+
+test("0.2 initialization scaffolds architecture lenses with mandatory flows and Flow.md contracts", async (t) => {
+  const root = await temporaryProject(true);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root);
+
+  const archIndex = await readFile(join(root, ".memory", "architecture", "index.md"), "utf8");
+  assert.match(archIndex, /type: ArchitectureIndex/);
+  assert.match(archIndex, /## Flow map/);
+
+  // Mandatory flows must exist
+  for (const layer of ["system-design", "domain", "security"]) {
+    const flowPath = join(root, ".memory", "architecture", layer, "Flow.md");
+    const flowContent = await readFile(flowPath, "utf8");
+    assert.match(flowContent, new RegExp(`layer: ${layer}`));
+    assert.match(flowContent, /type: Flow/);
+    assert.match(flowContent, /## Responsibility/);
+    assert.match(flowContent, /## Route/);
+    assert.match(flowContent, /## Steps/);
+    assert.match(flowContent, /## Domain contract/);
+    assert.match(flowContent, /## Code anchors/);
+  }
+
+  const validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+});
+
+test("0.2 validation rejects non-Flow.md files and invalid layer assignments", async (t) => {
+  const root = await temporaryProject(false);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root);
+
+  // 1. Wrong casing flow.md instead of Flow.md
+  await rename(
+    join(root, ".memory", "architecture", "domain", "Flow.md"),
+    join(root, ".memory", "architecture", "domain", "flow.md"),
+  );
+  let validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "missing-mandatory-flow" || d.code === "invalid-flow-file"));
+
+  // Restore Flow.md
+  await rename(
+    join(root, ".memory", "architecture", "domain", "flow.md"),
+    join(root, ".memory", "architecture", "domain", "Flow.md"),
+  );
+
+  // 2. Layer mismatch between frontmatter and directory
+  const domainFlow = await readFile(join(root, ".memory", "architecture", "domain", "Flow.md"), "utf8");
+  await writeFile(
+    join(root, ".memory", "architecture", "domain", "Flow.md"),
+    domainFlow.replace("layer: domain", "layer: frontend"),
+  );
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "flow-layer-mismatch"));
+});
+
+test("0.2 safe migration upgrades 0.1 legacy bundle to 0.2 with architecture lenses", async (t) => {
+  const root = await temporaryProject(false);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // Create a minimal 0.1 legacy bundle
+  await mkdir(join(root, ".memory", "sources"), { recursive: true });
+  await writeFile(join(root, ".memory", "index.md"), `---
+memory_version: "0.1"
+project: Legacy
+summary: Legacy project
+active_scope: .
+active_objective: OBJ-001
+status: draft
+title: Legacy Project Memory
+description: Executive memory capsule.
+timestamp: 2026-01-01T00:00:00Z
+repository_head: null
+repository_fingerprint: null
+last_scan_at: null
+---
+# Project Memory
+
+## Project
+- Purpose: Legacy
+
+## Active
+<!-- memory:generated:start active -->
+- Objective: [OBJ-001](/goal.md)
+<!-- memory:generated:end active -->
+
+## Map
+- [Goal](/goal.md)
+- [Progress](/progress.md)
+- [Tasks](/tasks.md)
+- [History](/log.md)
+- [Sources](/sources/)
+
+## Scopes
+<!-- memory:generated:start scopes -->
+- [Project](/goal.md) — active
+<!-- memory:generated:end scopes -->
+`);
+
+  await writeFile(join(root, ".memory", "goal.md"), `---
+type: Goal
+title: Legacy goal
+description: Goal
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+status: draft
+provenance: observed
+uid: 00000000-0000-0000-0000-000000000001
+---
+# Goal
+`);
+
+  await writeFile(join(root, ".memory", "progress.md"), `---
+type: Progress
+title: Legacy progress
+description: Progress
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Progress
+`);
+
+  await writeFile(join(root, ".memory", "tasks.md"), `---
+type: Tasks
+title: Legacy tasks
+description: Tasks
+timestamp: 2026-01-01T00:00:00Z
+scope: .
+---
+# Tasks
+`);
+
+  await writeFile(join(root, ".memory", "log.md"), `# Log\n`);
+  await writeFile(join(root, ".memory", "sources", "index.md"), `# Sources\n`);
+
+  // Pre-migration validation fails on 0.1
+  let validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "version"));
+
+  // Run migration
+  const result = await migrateBundle(root);
+  assert.equal(result.version, "0.2");
+  assert.equal(result.validation.ok, true);
+
+  // Check 0.2 root index
+  const migratedIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  assert.match(migratedIndex, /memory_version: "0.2"/);
+  assert.match(migratedIndex, /architecture_mode:\s*"?ddd"?/);
+  assert.match(migratedIndex, /## Architecture/);
+
+  // Check architecture files
+  assert.equal(typeof await readFile(join(root, ".memory", "architecture", "index.md"), "utf8"), "string");
+  for (const layer of ["system-design", "domain", "security"]) {
+    assert.equal(typeof await readFile(join(root, ".memory", "architecture", layer, "Flow.md"), "utf8"), "string");
+  }
+
+  // Post-migration validation succeeds
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+});
+
 
 

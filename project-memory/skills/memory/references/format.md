@@ -1,12 +1,19 @@
-# Project Memory Format 0.1
+# Project Memory Format 0.2
 
 ## Bundle
 
 A bundle is a UTF-8 Markdown wiki rooted at `.memory/`. The root and every tracked scope contain:
 
-- `index.md` — progressive-disclosure map;
+- `index.md` — progressive-disclosure executive router;
+- `architecture/` — dynamic architecture lenses and Flow contracts:
+  - `index.md` — complete architecture map & flow routing table;
+  - `system-design/Flow.md` — mandatory top-level system entry point and high-level routing;
+  - `domain/Flow.md` — mandatory DDD model, bounded contexts, ubiquitous language, and business invariants;
+  - `security/Flow.md` — mandatory trust boundaries, permissions, and security policies;
+  - Conditional layers when detected: `frontend/Flow.md`, `gateway-edge/Flow.md`, `auth/Flow.md`, `backend/Flow.md`, `database/Flow.md`, `cloud-observability/Flow.md`;
 - `goal.md` — current approved intent;
 - `progress.md` — current state, evidence, and one next action;
+- `tasks.md` — bounded ADHD task breakdown;
 - `log.md` — append-only history, newest date first.
 
 Intermediate grouping directories require only `index.md`. Additional documents are created when useful. `.memory/sources/` stores one source record per approved raw source.
@@ -28,17 +35,22 @@ Every non-reserved Markdown document starts with YAML frontmatter. `type` is req
 
 ```yaml
 ---
-type: Architecture
-title: Event architecture
-description: Event routing and persistence boundaries.
-resource: repo://apps/api/src/domains/events
-tags: [events, api]
-timestamp: 2026-05-28T14:30:00Z
+type: Flow
+title: System design flow
+description: Top-level system architecture and component routing.
+layer: system-design
+scope: .
+status: observed
+repo_paths: [package.json, tsconfig.json]
+upstream: []
+downstream: [frontend, backend]
 provenance: observed
+repository_fingerprint: sha256:...
+timestamp: 2026-05-28T14:30:00Z
 ---
 ```
 
-The root `index.md` is an executive memory capsule and the only index with frontmatter. It contains `## Project` (1-line facts), `## Active` (active objective, scope, state, next action, blocker), `## Map` (standard navigation links), and `## Scopes` (bounded list of up to 5 scopes). Codebase treemaps are generated on demand via `memory map` rather than inflated in the root index.
+The root `index.md` is an executive memory capsule and the only index with frontmatter (`memory_version: "0.2"`, `architecture_mode: "ddd"`, `architecture_index: "/architecture/"`, `system_flow: "/architecture/system-design/Flow.md"`). It contains `## Project` (1-line facts), `## Now` (active objective, scope, state, next action, blocker), `## Architecture` (direct links to mandatory flows & index), `## Find` (quick lookup table), and `## Active scopes` (bounded list of up to 5 scopes). Codebase treemaps are generated on demand via `memory map` rather than inflated in the root index.
 
 ## Identity, requirement IDs, and links
 

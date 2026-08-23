@@ -1,4 +1,4 @@
-# CLI JSON contracts for format 0.1
+# CLI JSON contracts for format 0.2
 
 Run commands with `--json` for machine-readable output. JSON is written to stdout on success. Errors are written to stderr as `{"error":"message"}` with exit code 1. Usage errors use exit code 2. `validate` uses exit code 1 when the bundle is structurally invalid.
 
@@ -161,6 +161,19 @@ Output:
 {
   "changes": ["Common change objects"],
   "validation": "Validation result; omitted for dry-run"
+}
+```
+
+## `migrate`
+
+Safely upgrades a legacy 0.1 Project Memory bundle to the 0.2 architecture lenses and DDD model format with automatic rollback on error.
+
+```json
+{
+  "root": "/absolute/project",
+  "version": "0.2",
+  "changes": ["Common change objects"],
+  "validation": "Validation result object"
 }
 ```
 

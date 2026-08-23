@@ -83,7 +83,8 @@ node skills/memory/scripts/memory.mjs --help
 | Command | What it does | Typical use |
 |---|---|---|
 | `memory scan --json` | Finds repository files and possible feature scopes | Before initialization |
-| `memory init [--scope path]` | Creates `.memory/` with deep codebase scan by default & treemap in `index.md` | Start project memory or onboard mid-project |
+| `memory init [--scope path]` | Creates `.memory/` with dynamic architecture lenses & DDD model | Start project memory or onboard mid-project |
+| `memory migrate` | Upgrades legacy 0.1 bundle to 0.2 architecture lenses | Upgrade existing project memory |
 | `memory scaffold --scope path` | Adds an approved tracked scope | Add a feature area |
 | `memory status [--scope path]` | Shows lifecycle, blockers, source state, and next action | Resume work |
 | `memory record --source repo://path` | Registers an approved local source | Add requirements or evidence |
@@ -116,11 +117,22 @@ Minimalistic command interface:
   3. *Design Patterns*: Architectural pattern selection (consults `software-design-patterns` skill).
 - **Incremental Sync**: Saves confirmed answers into `.memory/goal.md` and syncs rules to `AGENTS.md`.
 
-## Memory layout
+## Memory layout (Format 0.2)
 
 ```text
 .memory/
-├── index.md
+├── index.md                         # Executive router (< 4 KB budget)
+├── architecture/
+│   ├── index.md                     # Architecture flow map & index
+│   ├── system-design/Flow.md        # Mandatory: Top-level entry points & routing
+│   ├── domain/Flow.md               # Mandatory: DDD model, bounded contexts & invariants
+│   ├── security/Flow.md             # Mandatory: Trust boundaries & security policies
+│   ├── frontend/Flow.md             # Conditional: UI presentation & state
+│   ├── gateway-edge/Flow.md         # Conditional: Edge routing & middleware
+│   ├── auth/Flow.md                 # Conditional: Identity & tokens
+│   ├── backend/Flow.md              # Conditional: API controllers & services
+│   ├── database/Flow.md             # Conditional: Schemas & persistence
+│   └── cloud-observability/Flow.md  # Conditional: Infra, metrics & telemetry
 ├── goal.md
 ├── progress.md
 ├── tasks.md
@@ -137,7 +149,7 @@ Minimalistic command interface:
 ### Root directory (`.memory/`)
 
 - **`index.md`**
-  - **What it does:** Serves as the progressive-disclosure map for the entire project memory. Contains root metadata (`memory_version`), top-level document links, and auto-generated index regions bounded by markers (`<!-- memory:generated:start children -->`).
+  - **What it does:** Serves as the progressive-disclosure executive router for the entire project memory (< 4 KB budget). Contains root metadata (`memory_version: "0.2"`, `architecture_mode: "ddd"`), active objective state (`## Now`), architecture navigation links (`## Architecture`), lookup table (`## Find`), and tracked scopes (`## Active scopes`).
   - **Why it exists:** Provides agents and humans a fast, lightweight entry point to discover tracked scopes, top-level documents, and sources without needing to load the entire wiki into LLM context at once.
 - **`goal.md`**
   - **What it does:** Documents the current user-approved project intent, including core objectives, success metrics, architecture principles, structured requirements (`REQ-xxx`), and unresolved project interview questions (`P-Qxx`).
