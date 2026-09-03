@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { access, cp, mkdir, rm, symlink } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { linkOrCopy as baseLinkOrCopy } from "./install-utils.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,21 +37,7 @@ if (!force) {
   }
 }
 
-async function linkOrCopy(source, target, isDir = false) {
-  await mkdir(dirname(target), { recursive: true });
-  await rm(target, { recursive: true, force: true });
-  if (useSymlink) {
-    try {
-      const symlinkType = isDir ? (process.platform === "win32" ? "junction" : "dir") : "file";
-      await symlink(source, target, symlinkType);
-      return "symlinked";
-    } catch {
-      // Fallback to copy if symlinking fails
-    }
-  }
-  await cp(source, target, { recursive: isDir, force: true });
-  return "copied";
-}
+const linkOrCopy = (source, target, isDir = false) => baseLinkOrCopy(source, target, isDir, useSymlink);
 
 await mkdir(join(kiloRoot, "skills"), { recursive: true });
 await mkdir(join(kiloRoot, "command"), { recursive: true });

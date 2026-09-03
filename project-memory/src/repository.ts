@@ -1087,7 +1087,6 @@ export function discoverArchitectureLayers(
   deepScan?: DeepScanResult,
 ): ArchitectureDiscoveryResult {
   const filePaths = scan.files.map((file) => file.path);
-  const pathSet = new Set(filePaths);
   const detected = new Map<ArchitectureLayer, ArchitectureEvidence>();
 
   const mainDeps = new Set(deepScan?.dependencies.main ?? []);

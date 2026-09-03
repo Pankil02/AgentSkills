@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFile, realpath } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import {
   applyMemoryPlan,
   buildMemoryContext,
@@ -21,7 +21,7 @@ import {
   withBundleLock,
   type MemoryPlan,
 } from "../src/bundle.ts";
-import { assertSafeRelativePath, findProjectRoot, mapPathsToScopes, scanRepository } from "../src/repository.ts";
+import { findProjectRoot, mapPathsToScopes, scanRepository } from "../src/repository.ts";
 
 const ApplyAction = Type.Union([
   Type.Literal("init"),
@@ -301,7 +301,7 @@ export default function projectMemory(pi: ExtensionAPI): void {
           if (!params.evidence?.trim()) throw new Error("Completion requires an evidence summary");
           const approval = await requireSemanticApproval(ctx, "Complete goal", `Scope: ${scope}\nEvidence: ${params.evidence}`, params.approvalReason);
           if (!approval.approved) return textResult("Cancelled: completion was not approved.", { cancelled: true });
-          const goalPath = scope === "." ? "goal.md" : `${scope}/goal.md`;
+          const goalPath = scope === "." ? "goal.md" : `${scope}/agents.md`;
           const plan: MemoryPlan = {
             approved: true,
             approvalReason: approval.reason,
@@ -354,7 +354,7 @@ export default function projectMemory(pi: ExtensionAPI): void {
           }
         } else {
           const scope = scopeParts[0] || ".";
-          pi.sendUserMessage(`[Project Memory ${scope === "." ? "project" : "feature"} interview]\nRead .memory/index.md and ${scope === "." ? ".memory/goal.md" : `.memory/${scope}/goal.md`}. Conduct an interactive Grill-Me style interview (3–4 rounds minimum). Rules:\n1. Ask questions ONE AT A TIME using interactive tools (memory_ask or ask_question).\n2. For every question, inspect the repository first and provide a recommended option prefixed with '(Recommended)'.\n3. Walk down each branch of the design tree sequentially.\n4. Round 1 MUST ask: (a) Is this a new feature or add-on feature? (b) Create a new folder or use an existing folder? (c) What design patterns and architecture to use?\n5. Round 2 (5–10 clarifying follow-ups) and Round 3+ (refinements) until intent is crystal clear.\n6. Record confirmed answers incrementally with memory_apply. Present a final synthesis and request explicit approval before moving to ready.`);
+          pi.sendUserMessage(`[Project Memory ${scope === "." ? "project" : "feature"} interview]\nRead .memory/index.md and ${scope === "." ? ".memory/goal.md" : `.memory/${scope}/agents.md`}. Conduct an interactive Grill-Me style interview (3–4 rounds minimum). Rules:\n1. Ask questions ONE AT A TIME using interactive tools (memory_ask or ask_question).\n2. For every question, inspect the repository first and provide a recommended option prefixed with '(Recommended)'.\n3. Walk down each branch of the design tree sequentially.\n4. Round 1 MUST ask: (a) Is this a new feature or add-on feature? (b) Create a new folder or use an existing folder? (c) What design patterns and architecture to use?\n5. Round 2 (5–10 clarifying follow-ups) and Round 3+ (refinements) until intent is crystal clear.\n6. Record confirmed answers incrementally with memory_apply. Present a final synthesis and request explicit approval before moving to ready.`);
         }
       } catch (error) {
         show(ctx, (error as Error).message, "error");
@@ -442,13 +442,13 @@ export default function projectMemory(pi: ExtensionAPI): void {
           }
           const confirmed = !ctx.hasUI || await ctx.ui.confirm("Approve completion?", `Scope: ${scope}\nVerified criteria: ${readiness.verified.join(", ")}\nThis marks the approved goal complete. History and evidence remain preserved.`);
           if (!confirmed) return;
-          const goalPath = scope === "." ? "goal.md" : `${scope}/goal.md`;
+          const goalPath = scope === "." ? "goal.md" : `${scope}/agents.md`;
           const plan: MemoryPlan = {
             approved: true,
             approvalReason: "Explicitly approved through memory-reflect complete",
             operations: [
               { action: "update_frontmatter", path: goalPath, values: { status: "complete" }, semantic: true },
-              { action: "append_log", scope, event: { type: "completion", title: "Goal completed", evidence: "Acceptance evidence reviewed in progress.md", approval: "Explicit completion confirmation" } },
+              { action: "append_log", scope, event: { type: "completion", title: "Goal completed", evidence: "Acceptance evidence reviewed in progress.md / agents.md", approval: "Explicit completion confirmation" } },
               { action: "sync_indexes" },
             ],
           };

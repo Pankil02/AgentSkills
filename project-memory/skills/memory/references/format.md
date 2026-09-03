@@ -2,21 +2,33 @@
 
 ## Bundle
 
-A bundle is a UTF-8 Markdown wiki rooted at `.memory/`. The root and every tracked scope contain:
+A bundle is a UTF-8 Markdown wiki rooted at `.memory/`.
 
+### Root Structure (`.memory/`)
+The root contains:
 - `index.md` — progressive-disclosure executive router;
+- `goal.md` — current approved project intent (strictly root only);
+- `progress.md` — current project state, evidence, and next action (strictly root only);
+- `tasks.md` — bounded ADHD task breakdown (strictly root only);
+- `log.md` — append-only history, newest date first;
 - `architecture/` — dynamic architecture lenses and Flow contracts:
   - `index.md` — complete architecture map & flow routing table;
   - `system-design/Flow.md` — mandatory top-level system entry point and high-level routing;
   - `domain/Flow.md` — mandatory DDD model, bounded contexts, ubiquitous language, and business invariants;
   - `security/Flow.md` — mandatory trust boundaries, permissions, and security policies;
   - Conditional layers when detected: `frontend/Flow.md`, `gateway-edge/Flow.md`, `auth/Flow.md`, `backend/Flow.md`, `database/Flow.md`, `cloud-observability/Flow.md`;
-- `goal.md` — current approved intent;
-- `progress.md` — current state, evidence, and one next action;
-- `tasks.md` — bounded ADHD task breakdown;
-- `log.md` — append-only history, newest date first.
+- `sources/` — stores one source record per approved raw source (`index.md` + source records).
 
-Intermediate grouping directories require only `index.md`. Additional documents are created when useful. `.memory/sources/` stores one source record per approved raw source.
+### Tracked Subfolder Scopes (`.memory/<scope>/`)
+Each tracked scope subfolder contains **ONLY and ONLY**:
+- `agents.md` — unified document combining:
+  1. Scope architecture summary & entry points
+  2. Goal intent & requirements (with stable `AC-NNN` acceptance criteria)
+  3. Current state, drift/blockers, and acceptance evidence table
+  4. ADHD task breakdown (single next action, active tasks ≤ 5, backlog)
+- `log.md` — append-only history for the scope.
+
+Subfolders do NOT contain `goal.md`, `progress.md`, `tasks.md`, or `index.md`. Intermediate grouping directories do not contain redundant files.
 
 ## Token Efficiency & Hard Budgets
 

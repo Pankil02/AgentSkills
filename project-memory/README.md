@@ -17,9 +17,16 @@ memory init
 
 # For an existing mature codebase (deep codebase scan):
 memory init --deep
+
+# To upgrade/migrate an existing legacy bundle (shifts subfolder files to agents.md):
+memory migrate
+
 memory status
 memory validate
 ```
+
+> [!TIP]
+> **Upgrading from older versions?** Check the [Upgrade & Migration Guide](UPGRADE.md) to learn how `memory migrate` automatically consolidates subfolder `goal.md`, `progress.md`, and `tasks.md` into unified `agents.md` files.
 
 Then run `/memory-init` (or `/memory-ingest`) to conduct the interactive **Grill-Me style interview** (asks questions one-by-one with recommended defaults across 3–4 iterative rounds). Before later work, read `.memory/index.md`; after meaningful work, run `/memory-reflect` to update progress, evidence, history, and next actions.
 
@@ -139,11 +146,8 @@ Minimalistic command interface:
 ├── log.md
 ├── sources/
 └── <tracked scope>/
-    ├── index.md
-    ├── goal.md
-    ├── progress.md
-    ├── tasks.md
-    └── log.md
+    ├── agents.md                    # Combined: scope architecture, goal intent, progress & ADHD tasks
+    └── log.md                       # Append-only scope history
 ```
 
 ### Root directory (`.memory/`)
@@ -151,13 +155,13 @@ Minimalistic command interface:
 - **`index.md`**
   - **What it does:** Serves as the progressive-disclosure executive router for the entire project memory (< 4 KB budget). Contains root metadata (`memory_version: "0.2"`, `architecture_mode: "ddd"`), active objective state (`## Now`), architecture navigation links (`## Architecture`), lookup table (`## Find`), and tracked scopes (`## Active scopes`).
   - **Why it exists:** Provides agents and humans a fast, lightweight entry point to discover tracked scopes, top-level documents, and sources without needing to load the entire wiki into LLM context at once.
-- **`goal.md`**
+- **`goal.md`** (Strictly Root Only)
   - **What it does:** Documents the current user-approved project intent, including core objectives, success metrics, architecture principles, structured requirements (`REQ-xxx`), and unresolved project interview questions (`P-Qxx`).
   - **Why it exists:** Acts as the single source of truth for overall project intent and scope boundary. Prevents goal drift, unauthorized feature creep, and unverified assumptions across sessions.
-- **`progress.md`**
+- **`progress.md`** (Strictly Root Only)
   - **What it does:** Tracks operational lifecycle state (`not_started`, `in_progress`, `blocked`, `complete`), acceptance criteria verification rows (`AC-xxx` mapped to `repo://` evidence paths), known blockers, and exactly *one next action*.
   - **Why it exists:** Captures real-time operational status and verified evidence. Allows any coding agent or developer to immediately resume work without guessing what was tested or what step to take next.
-- **`tasks.md`**
+- **`tasks.md`** (Strictly Root Only)
   - **What it does:** Formats and organizes active project tasks formatted with `/i-have-adhd` principles (single next action first, <= 5 active items, numbered single-bounded steps, concrete time estimates `[X min]`).
   - **Why it exists:** Reduces working memory friction and allows immediate action execution for readers/agents using ADHD-friendly productivity rules.
 - **`log.md`**
@@ -169,17 +173,15 @@ Minimalistic command interface:
 
 ### Tracked scopes (`.memory/<tracked scope>/`)
 
-Tracked scopes represent distinct feature areas or subsystems (e.g., `.memory/auth/` or `.memory/api/v1/`). Subdirectories mirror the root layout structure:
+Tracked scopes represent distinct feature areas or subsystems (e.g., `.memory/apps/api/src/domains/user/`). Each scope contains **strictly and only**:
 
-- **`index.md`**
-  - **What it does:** Navigation map for the specific tracked scope, linking child documents, sub-components, and nested sub-scopes.
-  - **Why it exists:** Enables targeted reading and progressive navigation when working inside a focused subsystem.
-- **`goal.md`**
-  - **What it does:** Stores feature-specific approved intent, localized requirements (`REQ-xxx`), scoped acceptance criteria (`AC-xxx`), and open scope questions (`<scope>-Qxx`).
-  - **Why it exists:** Keeps subsystem goals isolated and detailed without cluttering the global project goal document.
-- **`progress.md`**
-  - **What it does:** Maintains scope-specific operational lifecycle, feature verification table, local blockers, and the single next action for this feature area.
-  - **Why it exists:** Allows independent feature tracking and evidence collection across distinct modules or team workstreams.
+- **`agents.md`**
+  - **What it does:** Unified scope file combining:
+    1. Scope architecture summary, code anchors, entry points, API routes, and database schemas.
+    2. Feature-specific approved intent, motivation, boundaries, and acceptance criteria (`AC-xxx`).
+    3. Operational progress, blockers/drift, and acceptance evidence verification table.
+    4. ADHD-optimized task breakdown (single next action first, active tasks ≤ 5, backlog).
+  - **Why it exists:** Keeps subsystem context, instructions, and execution completely self-contained in a single token-efficient file without cluttering the project with redundant boilerplate files.
 - **`log.md`**
   - **What it does:** Append-only history of decisions, updates, work items, and verification events specific to this feature scope.
   - **Why it exists:** Keeps feature-level decision logs clean, readable, and co-located with the scope code and goals.

@@ -12,7 +12,6 @@ import {
   generateTreemapContent,
   isExcludedPath,
   isPathInside,
-  type ArchitectureDiscoveryResult,
   type ArchitectureEvidence,
   type ArchitectureLayer,
   type DeepScanResult,
@@ -60,7 +59,9 @@ const GOAL_TRANSITIONS: Record<string, Set<string>> = {
   archived: new Set(["draft"]),
 };
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
-const CORE_FILES = ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"] as const;
+const ROOT_CORE_FILES = ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"] as const;
+const SCOPE_CORE_FILES = ["agents.md", "log.md"] as const;
+const ROOT_ONLY_FILES = new Set(["goal.md", "progress.md", "tasks.md"]);
 const MAX_CONTEXT_PREVIEW = 20_000;
 
 export type Severity = "error" | "warning";
@@ -501,7 +502,6 @@ ${tableRows.join("\n")}
 function flowTemplate(
   layer: ArchitectureLayer,
   evidence?: ArchitectureEvidence,
-  deepScan?: DeepScanResult,
   fingerprint?: string,
   timestamp?: string,
 ): string {
@@ -1018,43 +1018,46 @@ function buildDeepGoalContent(scope: string, timestamp: string, initialContext: 
   }, body);
 }
 
-function buildScopeDeepGoalContent(scope: string, timestamp: string, deepScan: DeepScanResult): string {
+function buildScopeAgentsContent(scope: string, timestamp: string, deepScan?: DeepScanResult): string {
   const title = titleFromPath(scope);
-  const scopeFiles = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`));
-  const entryPoints = deepScan.architecture.entryPoints.filter((e) => e.startsWith(`${scope}/`));
-  const apiRoutes = deepScan.architecture.apiRoutes.filter((r) => r.startsWith(`${scope}/`));
-  const schemas = deepScan.architecture.databaseSchemas.filter((s) => s.startsWith(`${scope}/`));
+  let archSummary = "";
 
-  let body = `# Goal\n\n## Scope Summary\n\nAuto-scaffolded scope for \`${scope}\` (${scopeFiles.length} files).\n\n`;
+  if (deepScan) {
+    const scopeFiles = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`));
+    const entryPoints = deepScan.architecture.entryPoints.filter((e) => e.startsWith(`${scope}/`));
+    const apiRoutes = deepScan.architecture.apiRoutes.filter((r) => r.startsWith(`${scope}/`));
+    const schemas = deepScan.architecture.databaseSchemas.filter((s) => s.startsWith(`${scope}/`));
 
-  if (entryPoints.length > 0) {
-    body += `### Entry Points\n\n`;
-    for (const ep of entryPoints) body += `- \`${ep}\`\n`;
-    body += `\n`;
+    archSummary = `Auto-scaffolded scope for \`${scope}\` (${scopeFiles.length} files).\n\n`;
+    if (entryPoints.length > 0) {
+      archSummary += `### Entry Points\n\n`;
+      for (const ep of entryPoints) archSummary += `- \`${ep}\`\n`;
+      archSummary += `\n`;
+    }
+    if (apiRoutes.length > 0) {
+      archSummary += `### API Routes\n\n`;
+      for (const route of apiRoutes) archSummary += `- \`${route}\`\n`;
+      archSummary += `\n`;
+    }
+    if (schemas.length > 0) {
+      archSummary += `### Schemas & Models\n\n`;
+      for (const schema of schemas) archSummary += `- \`${schema}\`\n`;
+      archSummary += `\n`;
+    }
+  } else {
+    archSummary = `Tracked scope for \`${scope}\`.\n\n`;
   }
 
-  if (apiRoutes.length > 0) {
-    body += `### API Routes\n\n`;
-    for (const route of apiRoutes) body += `- \`${route}\`\n`;
-    body += `\n`;
-  }
-
-  if (schemas.length > 0) {
-    body += `### Schemas & Models\n\n`;
-    for (const schema of schemas) body += `- \`${schema}\`\n`;
-    body += `\n`;
-  }
-
-  body += `## Motivation\n\nPending interview.\n\n## User & outcome\n\n## Success measures\n\n## Scope & non-goals\n\n## Confirmed wants\n\n## Must-not rules\n\n## Requirements\n\n## Acceptance criteria\n\nUse stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.\n\n## Constraints & dependencies\n\n## Decisions & reversals\n\n## Questions & unresolved\n\n## Interview coverage\n\n- **Decisions:** 0 / 10–15\n- **State:** pending\n\n## Citations`;
+  const body = `# ${title} Agents\n\n> Combined instructions, architecture summary, goal requirements, progress, and tasks for \`${scope}\`.\n\n## Scope Architecture & Summary\n\n${archSummary.trimEnd()}\n\n## Goal & Requirements\n\n### Motivation\nPending interview.\n\n### User & outcome\n\n### Success measures\n\n### Scope & non-goals\n\n### Confirmed wants\n\n### Must-not rules\n\n### Requirements\n\n### Acceptance criteria\nUse stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.\n\n### Constraints & dependencies\n\n## Current State & Progress\n\n### Current state\nNot started.\n\n### Blockers & drift\nnone\n\n### Acceptance evidence\n| Criterion | Status | Evidence |\n|---|---|---|\n\n## Tasks & Action Items\n\n### Single next action\n- **Action:** Define scope requirements & task breakdown.\n- **File / Command:** Edit \`.memory/${scope}/agents.md\`.\n- **Time estimate:** [5 min]\n- **Requirement:** Unresolved\n- **Likely files:** \`${scope}/\`\n- **Verification:** User approval\n- **Approval:** pending\n\n### Active tasks (Do Now)\n> [!NOTE]\n> Maximum 5 active items. Numbered single-bounded steps only.\n\n1. [ ] **Define scope requirements** \`[10 min]\` (REQ-001) — Specify main features for \`${scope}\`\n2. [ ] **Verify scope boundaries** \`[10 min]\` (REQ-002) — Confirm inputs, outputs, and dependencies\n\n### Backlog (Do Later)\n- [ ] **Acceptance criteria verification** \`[20 min]\` (AC-001) — Map test evidence paths\n\n### Completed tasks summary\n- **Total completed:** 0\n- **Summary:** No tasks completed yet.\n`;
 
   return serializeMarkdown({
-    type: "Goal",
-    title: `${title} goal`,
-    description: `Goal for ${scope}.`,
+    type: "Agents",
+    title: `${title} agents`,
+    description: `Combined agent instructions, goal, progress, and tasks for ${scope}.`,
     timestamp,
     scope,
     status: "draft",
-    provenance: "observed",
+    provenance: deepScan ? "observed" : "unresolved",
     uid: randomUUID(),
   }, body);
 }
@@ -1090,7 +1093,7 @@ export async function initializeBundle(
   }
 
   for (const scope of normalizedScopes) {
-    await assertNoBundleParentSymlink(join(scopeDirectory(root, scope), "index.md"));
+    await assertNoBundleParentSymlink(join(scopeDirectory(root, scope), "agents.md"));
   }
   const unmanagedAgents = await readUnmanagedAgentsContent(root);
   const changes: FileChange[] = [];
@@ -1112,42 +1115,26 @@ export async function initializeBundle(
     [join(memoryRoot, "architecture", "index.md"), architectureIndexTemplate(discovery.detectedLayers, timestamp)],
   ]);
 
-  // Mandatory architecture layers
-  for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
+  const layersToScaffold = [
+    ...MANDATORY_ARCHITECTURE_LAYERS,
+    ...CONDITIONAL_ARCHITECTURE_LAYERS.filter((layer) => discovery.layers.has(layer)),
+  ];
+  for (const layer of layersToScaffold) {
     const evidence = discovery.layers.get(layer);
     rootFiles.set(
       join(memoryRoot, "architecture", layer, "Flow.md"),
-      flowTemplate(layer, evidence, deepScan, initialScan.fingerprint, timestamp),
+      flowTemplate(layer, evidence, initialScan.fingerprint, timestamp),
     );
-  }
-
-  // Detected conditional architecture layers
-  for (const layer of CONDITIONAL_ARCHITECTURE_LAYERS) {
-    if (discovery.layers.has(layer)) {
-      const evidence = discovery.layers.get(layer);
-      rootFiles.set(
-        join(memoryRoot, "architecture", layer, "Flow.md"),
-        flowTemplate(layer, evidence, deepScan, initialScan.fingerprint, timestamp),
-      );
-    }
   }
 
   for (const [path, content] of rootFiles) changes.push({ ...(await plannedWrite(path, content, dryRun, false)), path: relativeChangePath(root, path) });
 
   const tracked = [".", ...normalizedScopes];
   for (const scope of normalizedScopes) {
-    for (const directory of allDirectoryPrefixes(scope)) {
-      const path = join(safeBundleFile(root, directory), "index.md");
-      changes.push({ ...(await plannedWrite(path, indexTemplate(titleFromPath(directory)), dryRun, false)), path: relativeChangePath(root, path) });
-    }
     const directory = scopeDirectory(root, scope);
-    const scopeGoalContent = deepScan
-      ? buildScopeDeepGoalContent(scope, timestamp, deepScan)
-      : goalTemplate(scope, timestamp);
+    const scopeAgentsContent = buildScopeAgentsContent(scope, timestamp, deepScan);
     const files = new Map<string, string>([
-      [join(directory, "goal.md"), scopeGoalContent],
-      [join(directory, "progress.md"), progressTemplate(scope, timestamp)],
-      [join(directory, "tasks.md"), tasksTemplate(scope, timestamp)],
+      [join(directory, "agents.md"), scopeAgentsContent],
       [join(directory, "log.md"), logTemplate(scope, date)],
     ]);
     for (const [path, content] of files) changes.push({ ...(await plannedWrite(path, content, dryRun, false)), path: relativeChangePath(root, path) });
@@ -1216,7 +1203,7 @@ function isTestFile(path: string): boolean {
   return /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)|\.(?:test|spec)\.[^.]+$/i.test(path);
 }
 
-function sourceFileLines(projectRoot: string, indexPath: string, scope: string, scan: RepositoryScan | undefined, tests: boolean): string[] {
+function sourceFileLines(scope: string, scan: RepositoryScan | undefined, tests: boolean): string[] {
   if (!scan || scope === "." || scope === "sources" || scope.startsWith("sources/")) return [];
   const direct = scan.files.filter((file) => normalizeSlash(dirname(file.path)) === scope && isTestFile(file.path) === tests);
   return direct.map((file) => {
@@ -1228,14 +1215,60 @@ export async function discoverTrackedScopes(projectRoot: string): Promise<string
   const memoryRoot = bundlePath(projectRoot);
   const walk = await walkMemory(memoryRoot);
   const directories = new Set<string>();
+
+  if (await readIfExists(join(memoryRoot, "goal.md")) !== undefined &&
+      await readIfExists(join(memoryRoot, "progress.md")) !== undefined &&
+      await readIfExists(join(memoryRoot, "log.md")) !== undefined) {
+    directories.add(".");
+  }
+
   for (const file of walk.files) {
-    if (basename(file) !== "goal.md") continue;
     const directory = dirname(file);
-    if (await readIfExists(join(directory, "progress.md")) !== undefined && await readIfExists(join(directory, "log.md")) !== undefined) {
-      directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
+    if (directory === memoryRoot) continue;
+    if (isPathInside(join(memoryRoot, "architecture"), directory) || isPathInside(join(memoryRoot, "sources"), directory)) continue;
+
+    const base = basename(file);
+    if (base === "agents.md") {
+      if (await readIfExists(join(directory, "log.md")) !== undefined) {
+        directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
+      }
+    } else if (base === "goal.md") {
+      if (await readIfExists(join(directory, "progress.md")) !== undefined && await readIfExists(join(directory, "log.md")) !== undefined) {
+        directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
+      }
     }
   }
   return [...directories].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b));
+}
+
+async function generateDocumentsList(
+  files: string[],
+  dir: string,
+  pathPrefix: string,
+  emptyMessage: string,
+): Promise<string> {
+  const directDocuments = files.filter((file) => dirname(file) === dir && !RESERVED_FILES.has(basename(file)));
+  const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
+    const metadata = await documentMetadata(file);
+    return markdownEntry(metadata.title, `${pathPrefix}${basename(file)}`, metadata.description);
+  }));
+  return documentLines.join("\n") || emptyMessage;
+}
+
+function computeScopeFingerprint(scan: RepositoryScan | undefined, scope: string): string | undefined {
+  if (!scan) return undefined;
+  return hashText(
+    scan.files
+      .filter((file) => scope === "." || file.path.startsWith(`${scope}/`))
+      .map((file) => `${file.path}:${file.size}:${file.mtimeMs}`)
+      .join("\n"),
+  );
+}
+
+function applySourceFingerprint(content: string, sourceFingerprint: string): string {
+  const marker = `<!-- memory:source-fingerprint ${sourceFingerprint} -->`;
+  const clean = content.replace(/<!-- memory:source-fingerprint [^>]+ -->\n?/, "");
+  return `${clean.trimEnd()}\n\n${marker}\n`;
 }
 
 export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, options: { dryRun?: boolean; now?: Date } = {}): Promise<FileChange[]> {
@@ -1321,8 +1354,18 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
           content = rootIndexTemplate(basename(root), nowIso(options.now), fallbackHead, undefined, scan?.fingerprint, discovery?.detectedLayers);
         } else if (isArchRoot) {
           content = architectureIndexTemplate(discovery?.detectedLayers ?? [...MANDATORY_ARCHITECTURE_LAYERS], nowIso(options.now));
+        } else if (directory === join(memoryRoot, "sources")) {
+          content = indexTemplate("Sources");
         } else {
-          content = indexTemplate(titleFromPath(scope));
+          const agentsPath = join(directory, "agents.md");
+          let agentsContent = await readIfExists(agentsPath);
+          const sourceFingerprint = computeScopeFingerprint(scan, scope);
+          if (agentsContent && sourceFingerprint) {
+            agentsContent = applySourceFingerprint(agentsContent, sourceFingerprint);
+            const change = await plannedWrite(agentsPath, agentsContent, dryRun, true);
+            changes.push({ ...change, path: relativeChangePath(root, agentsPath) });
+          }
+          continue;
         }
       }
 
@@ -1330,31 +1373,52 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         const rootParsed = parseMarkdown(content);
         if (!rootParsed.hasFrontmatter || rootParsed.errors.length > 0) throw new Error("Root index.md must contain valid frontmatter");
         const activeScope = typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
-        const progressPath = join(scopeDirectory(root, activeScope), "progress.md");
-        const progress = await readIfExists(progressPath);
-        const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
-        const nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
-        const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
-        const blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
 
-        const goalPath = join(scopeDirectory(root, activeScope), "goal.md");
-        const goalContent = await readIfExists(goalPath);
-        const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
-        const goalStatus = goalParsed?.data.status ? String(goalParsed.data.status) : (typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft");
-
+        let nextClean = "Not set.";
+        let blockerClean = "none";
+        let goalStatus = typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft";
         let objectiveId = typeof rootParsed.data.active_objective === "string" ? rootParsed.data.active_objective : "OBJ-001";
         let objectiveTitle = "";
-        if (goalContent) {
-          const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
-          if (objMatch) {
-            objectiveId = objMatch[1];
-            objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
-          } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
-            objectiveTitle = ` ${goalParsed.data.title}`;
+
+        if (activeScope === ".") {
+          const progressPath = join(memoryRoot, "progress.md");
+          const progress = await readIfExists(progressPath);
+          const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
+          nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
+          const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
+          blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
+
+          const goalPath = join(memoryRoot, "goal.md");
+          const goalContent = await readIfExists(goalPath);
+          const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
+          if (goalParsed?.data.status) goalStatus = String(goalParsed.data.status);
+
+          if (goalContent) {
+            const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
+            if (objMatch) {
+              objectiveId = objMatch[1];
+              objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
+            } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
+              objectiveTitle = ` ${goalParsed.data.title}`;
+            }
+          }
+        } else {
+          const agentsPath = join(scopeDirectory(root, activeScope), "agents.md");
+          const agentsContent = await readIfExists(agentsPath);
+          if (agentsContent) {
+            const agentsParsed = parseMarkdown(agentsContent);
+            if (agentsParsed.data.status) goalStatus = String(agentsParsed.data.status);
+            const next = extractSection(agentsContent, "Single next action") || extractSection(agentsContent, "Single Next Action") || extractSection(agentsContent, "Next action");
+            nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
+            const blockers = extractSection(agentsContent, "Blockers & drift") || extractSection(agentsContent, "Blockers & Drift");
+            blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
+            if (agentsParsed.data.title && typeof agentsParsed.data.title === "string") {
+              objectiveTitle = ` ${agentsParsed.data.title}`;
+            }
           }
         }
-        const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/goal.md`;
-        const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/`;
+        const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/agents.md`;
+        const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/agents.md`;
         const scopeLabel = activeScope === "." ? "Project" : activeScope;
 
         const activeText = `- Objective: [${objectiveId}](${goalLink})${objectiveTitle}\n- Active scope: [${scopeLabel}](${scopeLink})\n- State: ${goalStatus}\n- Next action: ${nextClean}\n- Blocker: ${blockerClean}`;
@@ -1376,13 +1440,15 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
 
         const scopeLines: string[] = [];
         for (const trackedScope of visibleScopes) {
-          const scopeGoalPath = join(scopeDirectory(root, trackedScope), "goal.md");
-          const metadata = await documentMetadata(scopeGoalPath);
-          const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/goal.md`;
+          const docPath = trackedScope === "."
+            ? join(memoryRoot, "goal.md")
+            : join(scopeDirectory(root, trackedScope), "agents.md");
+          const metadata = await documentMetadata(docPath);
+          const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/agents.md`;
           const label = trackedScope === "." ? "Project" : trackedScope;
           const status = metadata.status ? `(${metadata.status})` : "";
           const isActive = trackedScope === activeScope ? " — active" : "";
-          const desc = metadata.description && !metadata.description.startsWith("Goal for ") ? ` — ${metadata.description}` : "";
+          const desc = metadata.description && !metadata.description.startsWith("Goal for ") && !metadata.description.startsWith("Combined agent") ? ` — ${metadata.description}` : "";
           scopeLines.push(`- [${label}](${target})${status ? ` ${status}` : ""}${isActive}${desc}`.replace(/\s+/g, " ").trim());
         }
         if (remainingCount > 0) {
@@ -1397,21 +1463,19 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         }
 
         if (content.includes("<!-- memory:generated:start documents -->")) {
-          const directDocuments = walk.files.filter((file) => dirname(file) === memoryRoot && !RESERVED_FILES.has(basename(file)));
-          const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
-            const metadata = await documentMetadata(file);
-            return markdownEntry(metadata.title, `/${basename(file)}`, metadata.description);
-          }));
-          content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No root documents.");
+          content = replaceGeneratedRegion(
+            content,
+            "documents",
+            await generateDocumentsList(walk.files, memoryRoot, "/", "- No root documents."),
+          );
         }
 
         if (content.includes("<!-- memory:generated:start sources -->")) {
-          const sourceFiles = walk.files.filter((file) => dirname(file) === join(memoryRoot, "sources") && basename(file) !== "index.md");
-          const sourceLines = await Promise.all(sourceFiles.sort().map(async (file) => {
-            const metadata = await documentMetadata(file);
-            return markdownEntry(metadata.title, `/sources/${basename(file)}`, metadata.description);
-          }));
-          content = replaceGeneratedRegion(content, "sources", sourceLines.join("\n") || "- No sources registered.");
+          content = replaceGeneratedRegion(
+            content,
+            "sources",
+            await generateDocumentsList(walk.files, join(memoryRoot, "sources"), "/sources/", "- No sources registered."),
+          );
         }
 
         const rootUpdates: Record<string, unknown> = {};
@@ -1467,32 +1531,27 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         }
 
         if (content.includes("<!-- memory:generated:start documents -->")) {
-          const directDocuments = walk.files.filter((file) => dirname(file) === directory && !RESERVED_FILES.has(basename(file)));
-          const documentLines = await Promise.all(directDocuments.sort().map(async (file) => {
-            const metadata = await documentMetadata(file);
-            return markdownEntry(metadata.title, `./${basename(file)}`, metadata.description);
-          }));
-          content = replaceGeneratedRegion(content, "documents", documentLines.join("\n") || "- No documents.");
+          content = replaceGeneratedRegion(
+            content,
+            "documents",
+            await generateDocumentsList(walk.files, directory, "./", "- No documents."),
+          );
         }
 
         if (content.includes("<!-- memory:generated:start files -->")) {
-          const fileLines = sourceFileLines(root, indexPath, scope, scan, false);
+          const fileLines = sourceFileLines(scope, scan, false);
           content = replaceGeneratedRegion(content, "files", fileLines.join("\n") || "- No direct source files.");
         }
 
         if (content.includes("<!-- memory:generated:start tests -->")) {
-          const testLines = sourceFileLines(root, indexPath, scope, scan, true);
+          const testLines = sourceFileLines(scope, scan, true);
           content = replaceGeneratedRegion(content, "tests", testLines.join("\n") || "- No direct tests.");
         }
       }
 
-      const sourceFingerprint = scan
-        ? hashText(scan.files.filter((file) => scope === "." || file.path.startsWith(`${scope}/`)).map((file) => `${file.path}:${file.size}:${file.mtimeMs}`).join("\n"))
-        : undefined;
+      const sourceFingerprint = computeScopeFingerprint(scan, scope);
       if (sourceFingerprint && directory !== memoryRoot && !isArchRoot && !isArchLayer) {
-        const marker = `<!-- memory:source-fingerprint ${sourceFingerprint} -->`;
-        content = content.replace(/<!-- memory:source-fingerprint [^>]+ -->\n?/, "");
-        content = `${content.trimEnd()}\n\n${marker}\n`;
+        content = applySourceFingerprint(content, sourceFingerprint);
       }
 
       const change = await plannedWrite(indexPath, content, dryRun, true);
@@ -1823,12 +1882,31 @@ export async function recordEvent(projectRoot: string, scope: string, event: Rec
 }
 
 function extractSection(content: string, heading: string): string {
-  const pattern = new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "im");
+  const pattern = new RegExp(`^#{2,3}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "im");
   const match = pattern.exec(content);
   if (!match) return "";
   const rest = content.slice(match.index + match[0].length).replace(/^\s+/, "");
-  const next = rest.search(/^##\s+/m);
+  const next = rest.search(/^#{2,3}\s+/m);
   return (next >= 0 ? rest.slice(0, next) : rest).trim();
+}
+
+async function readScopeDocuments(directory: string, isRoot: boolean): Promise<{ goal?: string; progress?: string; agents?: string }> {
+  if (isRoot) {
+    const [goal, progress] = await Promise.all([
+      readIfExists(join(directory, "goal.md")),
+      readIfExists(join(directory, "progress.md")),
+    ]);
+    return { goal, progress };
+  }
+  const agents = await readIfExists(join(directory, "agents.md"));
+  if (agents) {
+    return { goal: agents, progress: agents, agents };
+  }
+  const [goal, progress] = await Promise.all([
+    readIfExists(join(directory, "goal.md")),
+    readIfExists(join(directory, "progress.md")),
+  ]);
+  return { goal, progress };
 }
 
 export async function checkCompletionReadiness(projectRoot: string, scope = ".", evidenceRoot = projectRoot): Promise<CompletionReadiness> {
@@ -1836,11 +1914,19 @@ export async function checkCompletionReadiness(projectRoot: string, scope = ".",
   const canonicalEvidenceRoot = await realpath(evidenceRoot);
   const safeScope = assertSafeRelativePath(scope);
   const directory = scopeDirectory(root, safeScope);
-  const [goal, progress] = await Promise.all([
-    readIfExists(join(directory, "goal.md")),
-    readIfExists(join(directory, "progress.md")),
-  ]);
-  if (!goal || !progress) return { ready: false, criteria: [], verified: [], missing: ["Tracked scope is missing goal.md or progress.md"] };
+
+  const docs = await readScopeDocuments(directory, safeScope === ".");
+  if (!docs.goal || !docs.progress) {
+    return {
+      ready: false,
+      criteria: [],
+      verified: [],
+      missing: [safeScope === "." ? "Tracked scope is missing goal.md or progress.md" : "Tracked scope is missing agents.md"],
+    };
+  }
+  const goal = docs.goal;
+  const progress = docs.progress;
+
   const criteria = [...new Set(extractSection(goal, "Acceptance criteria").match(/\bAC-\d{3}\b/g) ?? [])].sort();
   const evidenceSection = extractSection(progress, "Acceptance evidence");
   const verified: string[] = [];
@@ -1892,9 +1978,23 @@ export async function getMemoryStatus(projectRoot: string, scope?: string): Prom
   const rootParsed = parseMarkdown(rootIndex);
   const activeScope = scope ? assertSafeRelativePath(scope) : typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
   const directory = scopeDirectory(root, activeScope);
-  const goal = await readIfExists(join(directory, "goal.md"));
-  const progress = await readIfExists(join(directory, "progress.md"));
-  const goalStatus = goal ? parseMarkdown(goal).data.status : undefined;
+
+  let goalStatus: string | undefined;
+  let nextAction: string | undefined;
+  let blockers: string | undefined;
+
+  const docs = await readScopeDocuments(directory, activeScope === ".");
+  if (docs.agents) {
+    const parsed = parseMarkdown(docs.agents);
+    goalStatus = typeof parsed.data.status === "string" ? parsed.data.status : undefined;
+    nextAction = extractSection(docs.agents, "Single next action") || extractSection(docs.agents, "Single Next Action") || extractSection(docs.agents, "Next action") || undefined;
+    blockers = extractSection(docs.agents, "Blockers & drift") || extractSection(docs.agents, "Blockers & Drift") || extractSection(docs.agents, "Blockers and drift") || undefined;
+  } else {
+    goalStatus = docs.goal ? parseMarkdown(docs.goal).data.status as string : undefined;
+    nextAction = docs.progress ? extractSection(docs.progress, "Next action") : undefined;
+    blockers = docs.progress ? (extractSection(docs.progress, "Blockers & drift") || extractSection(docs.progress, "Blockers and drift")) : undefined;
+  }
+
   const sourceCounts: Record<string, number> = {};
   const sourceWalk = await walkMemory(join(bundlePath(root), "sources"));
   for (const path of sourceWalk.files) {
@@ -1908,8 +2008,8 @@ export async function getMemoryStatus(projectRoot: string, scope?: string): Prom
     root,
     activeScope,
     goalStatus: typeof goalStatus === "string" ? goalStatus : undefined,
-    nextAction: progress ? extractSection(progress, "Next action") : undefined,
-    blockers: progress ? extractSection(progress, "Blockers and drift") : undefined,
+    nextAction,
+    blockers,
     sourceCounts,
     validation: await validateBundle(root),
   };
@@ -2001,6 +2101,45 @@ export async function buildMemoryContext(
   return formatMemoryContext(fullContent);
 }
 
+function validateGoalLikeFrontmatter(
+  parsed: ParsedMarkdown,
+  rel: string,
+  docType: "Goal" | "Agents",
+  expectedScope: string,
+  diagnostics: Diagnostic[],
+): void {
+  const status = parsed.data.status;
+  if (typeof status !== "string" || !GOAL_STATUSES.has(status)) {
+    diagnostics.push({ severity: "error", code: "goal-status", path: rel, message: `Invalid goal status: ${String(status)}` });
+  }
+  for (const field of ["title", "description", "timestamp", "scope"]) {
+    if (typeof parsed.data[field] !== "string") {
+      diagnostics.push({ severity: "error", code: "managed-field", path: rel, message: `${docType} requires '${field}'` });
+    }
+  }
+  if (parsed.data.scope !== expectedScope) {
+    diagnostics.push({ severity: "error", code: "scope-mismatch", path: rel, message: `${docType} scope must be '${expectedScope}'` });
+  }
+}
+
+function isMissingRequiredNextActionField(nextAction: string): boolean {
+  const requiredNextActionFields = ["Action", "Requirement", "Likely files", "Verification", "Approval"];
+  return requiredNextActionFields.some((field) => {
+    const value = new RegExp(`\\*\\*${field}:\\*\\*\\s*([^\\n]+)`, "i").exec(nextAction)?.[1].trim();
+    return !value || /^(?:unknown|unresolved|none|pending|n\/a)\.?$/i.test(value);
+  });
+}
+
+function checkActiveTasksBudget(content: string, rel: string, diagnostics: Diagnostic[]): void {
+  const activeSection = extractAnySection(content, "Active tasks (Do Now)") || extractAnySection(content, "Active tasks");
+  if (activeSection) {
+    const taskLines = activeSection.split("\n").filter((l) => /^\s*(?:\d+\.|\*|-)\s*\[[ xX ]?\]/i.test(l) || /^\s*\d+\.\s+\*\*/.test(l));
+    if (taskLines.length > MAX_ACTIVE_TASKS) {
+      diagnostics.push({ severity: "error", code: "budget-active-tasks", path: rel, message: `Active tasks exceeds limit of ${MAX_ACTIVE_TASKS} items (${taskLines.length} tasks found)` });
+    }
+  }
+}
+
 export async function validateBundle(projectRoot: string): Promise<ValidationResult> {
   const root = resolve(projectRoot);
   const memoryRoot = bundlePath(root);
@@ -2050,7 +2189,6 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
       for (const entry of archEntries) {
         if (entry.isDirectory()) {
           const layerDirPath = join(archDir, entry.name);
-          const flowFilePath = join(layerDirPath, "Flow.md");
           const layerFiles = await readdir(layerDirPath);
           if (!layerFiles.includes("Flow.md")) {
             diagnostics.push({ severity: "error", code: "invalid-flow-file", path: `.memory/architecture/${entry.name}`, message: `Architecture layer directory '${entry.name}' must contain exact Flow.md` });
@@ -2173,31 +2311,40 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
       }
     }
 
+    const isSubfolder = dirname(path) !== memoryRoot;
+    if (isSubfolder && ROOT_ONLY_FILES.has(name)) {
+      diagnostics.push({ severity: "error", code: "root-only-file", path: rel, message: `${name} is only allowed in root .memory/, not in subfolders` });
+    }
+
     if (name === "goal.md") {
       if (byteLength > WARN_DOCUMENT_BYTES) {
         diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `goal.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
       }
-      scopeDirectories.add(dirname(path));
-      const status = parsed.data.status;
-      if (typeof status !== "string" || !GOAL_STATUSES.has(status)) diagnostics.push({ severity: "error", code: "goal-status", path: rel, message: `Invalid goal status: ${String(status)}` });
-      for (const field of ["title", "description", "timestamp", "scope"]) {
-        if (typeof parsed.data[field] !== "string") diagnostics.push({ severity: "error", code: "managed-field", path: rel, message: `Goal requires '${field}'` });
-      }
-      const expectedScope = scopeFromMemoryDirectory(memoryRoot, dirname(path));
-      if (parsed.data.scope !== expectedScope) diagnostics.push({ severity: "error", code: "scope-mismatch", path: rel, message: `Goal scope must be '${expectedScope}'` });
-      if (status === "active") {
+      if (!isSubfolder) scopeDirectories.add(dirname(path));
+      validateGoalLikeFrontmatter(parsed, rel, "Goal", scopeFromMemoryDirectory(memoryRoot, dirname(path)), diagnostics);
+      if (parsed.data.status === "active") {
         const progress = await readIfExists(join(dirname(path), "progress.md"));
         const headingCount = progress?.match(/^##\s+Next action\s*$/gim)?.length ?? 0;
         const nextAction = progress ? extractSection(progress, "Next action") : "";
-        const requiredNextActionFields = ["Action", "Requirement", "Likely files", "Verification", "Approval"];
-        const missingNextActionField = requiredNextActionFields.some((field) => {
-          const value = new RegExp(`\\*\\*${field}:\\*\\*\\s*([^\\n]+)`, "i").exec(nextAction)?.[1].trim();
-          return !value || /^(?:unknown|unresolved|none|pending|n\/a)\.?$/i.test(value);
-        });
-        if (headingCount !== 1 || !nextAction || missingNextActionField) {
+        if (headingCount !== 1 || !nextAction || isMissingRequiredNextActionField(nextAction)) {
           diagnostics.push({ severity: "error", code: "next-action", path: rel, message: "Active goals require exactly one approved, evidence-linked Next action with Action, Requirement, Likely files, Verification, and Approval" });
         }
       }
+    }
+
+    if (name === "agents.md" && isSubfolder) {
+      if (byteLength > WARN_DOCUMENT_BYTES) {
+        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `agents.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
+      }
+      scopeDirectories.add(dirname(path));
+      validateGoalLikeFrontmatter(parsed, rel, "Agents", scopeFromMemoryDirectory(memoryRoot, dirname(path)), diagnostics);
+      if (parsed.data.status === "active") {
+        const nextAction = extractAnySection(content, "Single next action") || extractAnySection(content, "Single Next Action") || extractAnySection(content, "Next action");
+        if (!nextAction || isMissingRequiredNextActionField(nextAction)) {
+          diagnostics.push({ severity: "error", code: "next-action", path: rel, message: "Active agents scope requires an approved, evidence-linked Single next action with Action, Requirement, Likely files, Verification, and Approval" });
+        }
+      }
+      checkActiveTasksBudget(content, rel, diagnostics);
     }
 
     if (parsed.data.type === "Progress" || name === "progress.md") {
@@ -2207,13 +2354,7 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
     }
 
     if (name === "tasks.md" || parsed.data.type === "Tasks") {
-      const activeSection = extractSection(content, "Active tasks (Do Now)") || extractSection(content, "Active tasks");
-      if (activeSection) {
-        const taskLines = activeSection.split("\n").filter((l) => /^\s*(?:\d+\.|\*|-)\s*\[[ xX ]?\]/i.test(l) || /^\s*\d+\.\s+\*\*/.test(l));
-        if (taskLines.length > MAX_ACTIVE_TASKS) {
-          diagnostics.push({ severity: "error", code: "budget-active-tasks", path: rel, message: `Active tasks exceeds limit of ${MAX_ACTIVE_TASKS} items (${taskLines.length} tasks found)` });
-        }
-      }
+      checkActiveTasksBudget(content, rel, diagnostics);
     }
 
     if (parsed.data.type === "Progress") {
@@ -2239,7 +2380,7 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
       const target = resolveMemoryLink(memoryRoot, path, link[1].trim());
       if (!target) continue;
       if (target === "__escape__") diagnostics.push({ severity: "error", code: "link-escape", path: rel, message: `Link escapes bundle: ${link[1]}` });
-      else if (!(await exists(target)) && !(await exists(join(target, "index.md")))) diagnostics.push({ severity: "warning", code: "broken-link", path: rel, message: `Broken link: ${link[1]}` });
+      else if (!(await exists(target)) && !(await exists(join(target, "index.md"))) && !(await exists(join(target, "agents.md")))) diagnostics.push({ severity: "warning", code: "broken-link", path: rel, message: `Broken link: ${link[1]}` });
     }
   }
 
@@ -2257,8 +2398,14 @@ export async function validateBundle(projectRoot: string): Promise<ValidationRes
   }
 
   for (const directory of scopeDirectories) {
-    for (const file of CORE_FILES) {
-      if (!(await exists(join(directory, file)))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative(root, directory)), message: `Tracked scope is missing ${file}` });
+    if (directory === memoryRoot) {
+      for (const file of ROOT_CORE_FILES) {
+        if (!(await exists(join(directory, file)))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative(root, directory)), message: `Root memory is missing ${file}` });
+      }
+    } else {
+      for (const file of SCOPE_CORE_FILES) {
+        if (!(await exists(join(directory, file)))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative(root, directory)), message: `Tracked scope is missing ${file}` });
+      }
     }
   }
 
@@ -2292,6 +2439,84 @@ export interface MigrateResult {
   validation: ValidationResult;
 }
 
+const extractAnySection = extractSection;
+
+function migrateLegacyScopeToAgents(
+  scope: string,
+  timestamp: string,
+  goalContent?: string,
+  progressContent?: string,
+  tasksContent?: string,
+  existingAgents?: string,
+): string {
+  if (existingAgents) return existingAgents;
+
+  const title = titleFromPath(scope);
+  const goalParsed = goalContent ? parseMarkdown(goalContent) : undefined;
+
+  const status = typeof goalParsed?.data.status === "string" ? goalParsed.data.status : "draft";
+  const provenance = typeof goalParsed?.data.provenance === "string" ? goalParsed.data.provenance : "observed";
+
+  const motivation = goalContent ? (extractAnySection(goalContent, "Motivation") || "") : "";
+  const reqs = goalContent ? (extractAnySection(goalContent, "Requirements") || "") : "";
+  const ac = goalContent ? (extractAnySection(goalContent, "Acceptance criteria") || "") : "";
+  const nonGoals = goalContent ? (extractAnySection(goalContent, "Scope & non-goals") || extractAnySection(goalContent, "Scope and non-goals") || "") : "";
+  const constraints = goalContent ? (extractAnySection(goalContent, "Constraints & dependencies") || extractAnySection(goalContent, "Constraints and dependencies") || "") : "";
+  const archSummary = goalContent ? (extractAnySection(goalContent, "Scope Architecture") || extractAnySection(goalContent, "Auto-Detected Architecture") || "") : "";
+
+  const currentState = progressContent ? (extractAnySection(progressContent, "Current state") || "") : "";
+  const blockers = progressContent ? (extractAnySection(progressContent, "Blockers & drift") || extractAnySection(progressContent, "Blockers and drift") || "") : "";
+  const evidence = progressContent ? (extractAnySection(progressContent, "Acceptance evidence") || "") : "";
+
+  const nextAction = (progressContent ? extractAnySection(progressContent, "Next action") : "") || (tasksContent ? extractAnySection(tasksContent, "Single next action") : "");
+  const activeTasks = tasksContent ? (extractAnySection(tasksContent, "Active tasks (Do Now)") || extractAnySection(tasksContent, "Active tasks") || "") : "";
+  const backlog = tasksContent ? (extractAnySection(tasksContent, "Backlog (Do Later)") || extractAnySection(tasksContent, "Backlog") || "") : "";
+  const completedTasks = tasksContent ? (extractAnySection(tasksContent, "Completed tasks summary") || extractAnySection(tasksContent, "Completed tasks") || "") : "";
+
+  let body = `# ${title} Agents\n\n> Combined instructions, architecture summary, goal requirements, progress, and tasks for \`${scope}\`.\n\n`;
+
+  body += `## Scope Architecture & Summary\n\n${archSummary || `Auto-migrated scope for \`${scope}\`.`}\n\n`;
+
+  body += `## Goal & Requirements\n\n`;
+  if (motivation) body += `### Motivation\n\n${motivation}\n\n`;
+  if (nonGoals) body += `### Scope & non-goals\n\n${nonGoals}\n\n`;
+  if (reqs) body += `### Requirements\n\n${reqs}\n\n`;
+  body += `### Acceptance criteria\n\n${ac || "Use stable IDs in the `AC-NNN` form. Each criterion must be independently verifiable."}\n\n`;
+  if (constraints) body += `### Constraints & dependencies\n\n${constraints}\n\n`;
+
+  body += `## Current State & Progress\n\n`;
+  body += `### Current state\n\n${currentState || "Active development."}\n\n`;
+  body += `### Blockers & drift\n\n${blockers || "none"}\n\n`;
+  body += `### Acceptance evidence\n\n${evidence || "| Criterion | Status | Evidence |\n|---|---|---|"}\n\n`;
+
+  body += `## Tasks & Action Items\n\n`;
+  if (nextAction) {
+    body += `### Single next action\n\n${nextAction.includes("- **Action:**") ? nextAction : `- **Action:** ${nextAction}\n- **File / Command:** Edit \`.memory/${scope}/agents.md\`\n- **Time estimate:** [15 min]\n- **Requirement:** Migrated\n- **Likely files:** \`${scope}/\`\n- **Verification:** User review\n- **Approval:** approved`}\n\n`;
+  } else {
+    body += `### Single next action\n\n- **Action:** Continue scope execution.\n- **File / Command:** Edit \`.memory/${scope}/agents.md\`\n- **Time estimate:** [15 min]\n- **Requirement:** Migrated\n- **Likely files:** \`${scope}/\`\n- **Verification:** User review\n- **Approval:** approved\n\n`;
+  }
+
+  if (activeTasks) {
+    body += `### Active tasks (Do Now)\n> [!NOTE]\n> Maximum 5 active items. Numbered single-bounded steps only.\n\n${activeTasks}\n\n`;
+  } else {
+    body += `### Active tasks (Do Now)\n> [!NOTE]\n> Maximum 5 active items. Numbered single-bounded steps only.\n\n1. [ ] **Scope review** \`[15 min]\` (REQ-001) — Review migrated scope items\n\n`;
+  }
+
+  if (backlog) body += `### Backlog (Do Later)\n\n${backlog}\n\n`;
+  if (completedTasks) body += `### Completed tasks summary\n\n${completedTasks}\n`;
+
+  return serializeMarkdown({
+    type: "Agents",
+    title: `${title} agents`,
+    description: `Combined agent instructions, goal, progress, and tasks for ${scope}.`,
+    timestamp,
+    scope,
+    status,
+    provenance,
+    uid: randomUUID(),
+  }, body);
+}
+
 export async function migrateBundle(
   projectRoot: string,
   options: { dryRun?: boolean; now?: Date } = {},
@@ -2311,8 +2536,16 @@ export async function migrateBundle(
     throw new Error("Root index has invalid frontmatter; repair it before migration");
   }
 
-  // If already 0.2 and valid, validate and return
-  if (initialParsed.data.memory_version === "0.2") {
+  const walk = await walkMemory(memoryRoot);
+  const legacySubfolderFiles = walk.files.filter((file) => {
+    const dir = dirname(file);
+    if (dir === memoryRoot || isPathInside(join(memoryRoot, "architecture"), dir) || isPathInside(join(memoryRoot, "sources"), dir)) return false;
+    const base = basename(file);
+    return ROOT_ONLY_FILES.has(base) || base === "index.md";
+  });
+
+  const is02 = initialParsed.data.memory_version === "0.2";
+  if (is02 && legacySubfolderFiles.length === 0) {
     const val = await validateBundle(root);
     return { root, version: "0.2", changes: [], validation: val };
   }
@@ -2340,9 +2573,76 @@ export async function migrateBundle(
       const flowPath = join(archDir, layer, "Flow.md");
       if (await readIfExists(flowPath) === undefined) {
         const evidence = discovery.layers.get(layer);
-        const content = flowTemplate(layer, evidence, deepScan, scan.fingerprint, timestamp);
+        const content = flowTemplate(layer, evidence, scan.fingerprint, timestamp);
         const change = await plannedWrite(flowPath, content, dryRun, false);
         changes.push({ ...change, path: relativeChangePath(root, flowPath) });
+      }
+    }
+
+    // 3. Detect and migrate legacy subfolder files (goal.md, progress.md, tasks.md, index.md)
+    const subfolderDirs = new Set<string>();
+    for (const file of walk.files) {
+      const dir = dirname(file);
+      if (dir === memoryRoot || isPathInside(join(memoryRoot, "architecture"), dir) || isPathInside(join(memoryRoot, "sources"), dir)) continue;
+      subfolderDirs.add(dir);
+    }
+
+    for (const subDir of subfolderDirs) {
+      const scope = scopeFromMemoryDirectory(memoryRoot, subDir);
+      const legacyGoal = join(subDir, "goal.md");
+      const legacyProgress = join(subDir, "progress.md");
+      const legacyTasks = join(subDir, "tasks.md");
+      const legacyIndex = join(subDir, "index.md");
+      const agentsPath = join(subDir, "agents.md");
+      const logPath = join(subDir, "log.md");
+
+      const [goalContent, progressContent, tasksContent, existingAgents, existingLog] = await Promise.all([
+        readIfExists(legacyGoal),
+        readIfExists(legacyProgress),
+        readIfExists(legacyTasks),
+        readIfExists(agentsPath),
+        readIfExists(logPath),
+      ]);
+
+      const hasLegacy = goalContent !== undefined || progressContent !== undefined || tasksContent !== undefined || (await readIfExists(legacyIndex)) !== undefined;
+
+      if (hasLegacy || (existingAgents === undefined && existingLog !== undefined)) {
+        const agentsContent = migrateLegacyScopeToAgents(
+          scope,
+          timestamp,
+          goalContent,
+          progressContent,
+          tasksContent,
+          existingAgents,
+        );
+        const agentsChange = await plannedWrite(agentsPath, agentsContent, dryRun, Boolean(existingAgents));
+        changes.push({ ...agentsChange, path: relativeChangePath(root, agentsPath) });
+
+        let logContent = existingLog ?? logTemplate(scope, date);
+        logContent = prependLogEntry(
+          logContent,
+          today(date),
+          `### Migration: Scope Restructure\n- **Update:** Migrated legacy subfolder files (goal.md, progress.md, tasks.md) into unified \`agents.md\`.\n- **Evidence:** Automated \`memory migrate\` data shift.\n`,
+        );
+        const logChange = await plannedWrite(logPath, logContent, dryRun, Boolean(existingLog));
+        changes.push({ ...logChange, path: relativeChangePath(root, logPath) });
+
+        for (const legacyFile of [legacyGoal, legacyProgress, legacyTasks, legacyIndex]) {
+          if (await readIfExists(legacyFile) !== undefined) {
+            if (!dryRun) await rm(legacyFile, { force: true });
+            changes.push({ path: relativeChangePath(root, legacyFile), action: "update" });
+          }
+        }
+      }
+
+      // Remove redundant intermediate directory index.md
+      for (const prefix of allDirectoryPrefixes(scope)) {
+        if (prefix === scope) continue;
+        const prefixIndex = join(safeBundleFile(root, prefix), "index.md");
+        if (await readIfExists(prefixIndex) !== undefined) {
+          if (!dryRun) await rm(prefixIndex, { force: true });
+          changes.push({ path: relativeChangePath(root, prefixIndex), action: "update" });
+        }
       }
     }
 
@@ -2479,7 +2779,7 @@ async function restoreBundle(projectRoot: string, snapshot: Map<string, string>)
 }
 
 export function operationRequiresApproval(operation: MemoryOperation): boolean {
-  if (operation.semantic || (operation.path ? basename(operation.path) === "goal.md" : false)) return true;
+  if (operation.semantic || (operation.path ? (basename(operation.path) === "goal.md" || basename(operation.path) === "agents.md") : false)) return true;
   if (["write_document", "update_frontmatter"].includes(operation.action)) {
     const path = operation.path?.replace(/\\/g, "/").replace(/^\.\//, "") ?? "";
     if (path === "progress.md" || path.endsWith("/progress.md")) return false;
@@ -2489,6 +2789,25 @@ export function operationRequiresApproval(operation: MemoryOperation): boolean {
   if (operation.action !== "append_log") return false;
   const eventType = String(operation.event?.type ?? operation.event?.category ?? "").toLowerCase();
   return ["completion", "contradiction-resolution", "correction", "decision", "preference", "reversal", "scope"].includes(eventType);
+}
+
+async function validateGoalStatusTransition(
+  projectRoot: string,
+  target: string,
+  previousStatus: unknown,
+  nextStatus: unknown,
+  evidenceRoot?: string,
+): Promise<void> {
+  if (typeof previousStatus === "string" && typeof nextStatus === "string") {
+    if (previousStatus !== nextStatus && !GOAL_TRANSITIONS[previousStatus]?.has(nextStatus)) {
+      throw new Error(`Invalid goal lifecycle transition: ${previousStatus} -> ${nextStatus}`);
+    }
+    if (nextStatus === "complete" && previousStatus !== "complete") {
+      const scope = scopeFromMemoryDirectory(bundlePath(projectRoot), dirname(target));
+      const readiness = await checkCompletionReadiness(projectRoot, scope, evidenceRoot);
+      if (!readiness.ready) throw new Error(`Completion evidence is incomplete: ${readiness.missing.join("; ")}`);
+    }
+  }
 }
 
 export async function applyMemoryPlan(projectRoot: string, plan: MemoryPlan, options: { dryRun?: boolean; scan?: RepositoryScan; evidenceRoot?: string } = {}): Promise<ApplyResult> {
@@ -2546,17 +2865,11 @@ export async function applyMemoryPlan(projectRoot: string, plan: MemoryPlan, opt
           if (parsed.data[field] !== previous.data[field]) throw new Error(`Source record '${field}' is immutable`);
         }
       }
-      if (basename(target) === "goal.md" && parsed.data.status === "complete") throw new Error("Complete goals with update_frontmatter so approved criteria cannot be replaced");
-      if (basename(target) === "goal.md" && existing && typeof parsed.data.status === "string") {
-        const previousStatus = parseMarkdown(existing).data.status;
-        if (typeof previousStatus === "string" && previousStatus !== parsed.data.status && !GOAL_TRANSITIONS[previousStatus]?.has(parsed.data.status)) {
-          throw new Error(`Invalid goal lifecycle transition: ${previousStatus} -> ${parsed.data.status}`);
-        }
-        if (parsed.data.status === "complete" && previousStatus !== "complete") {
-          const scope = scopeFromMemoryDirectory(bundlePath(projectRoot), dirname(target));
-          const readiness = await checkCompletionReadiness(projectRoot, scope, options.evidenceRoot);
-          if (!readiness.ready) throw new Error(`Completion evidence is incomplete: ${readiness.missing.join("; ")}`);
-        }
+
+      const isGoalDoc = basename(target) === "goal.md" || basename(target) === "agents.md";
+      if (isGoalDoc && parsed.data.status === "complete") throw new Error("Complete goals with update_frontmatter so approved criteria cannot be replaced");
+      if (isGoalDoc && existing && typeof parsed.data.status === "string") {
+        await validateGoalStatusTransition(projectRoot, target, parseMarkdown(existing).data.status, parsed.data.status, options.evidenceRoot);
       }
       const change = await plannedWrite(target, operation.content.endsWith("\n") ? operation.content : `${operation.content}\n`, options.dryRun ?? false, true);
       changes.push({ ...change, path: relativeChangePath(projectRoot, target) });
@@ -2570,16 +2883,9 @@ export async function applyMemoryPlan(projectRoot: string, plan: MemoryPlan, opt
           if (field in operation.values && operation.values[field] !== existingParsed.data[field]) throw new Error(`Source record '${field}' is immutable`);
         }
       }
-      if (basename(target) === "goal.md" && typeof operation.values.status === "string") {
-        const previousStatus = existingParsed.data.status;
-        if (typeof previousStatus === "string" && previousStatus !== operation.values.status && !GOAL_TRANSITIONS[previousStatus]?.has(operation.values.status)) {
-          throw new Error(`Invalid goal lifecycle transition: ${previousStatus} -> ${operation.values.status}`);
-        }
-        if (operation.values.status === "complete" && previousStatus !== "complete") {
-          const scope = scopeFromMemoryDirectory(bundlePath(projectRoot), dirname(target));
-          const readiness = await checkCompletionReadiness(projectRoot, scope, options.evidenceRoot);
-          if (!readiness.ready) throw new Error(`Completion evidence is incomplete: ${readiness.missing.join("; ")}`);
-        }
+      const isGoalDoc = basename(target) === "goal.md" || basename(target) === "agents.md";
+      if (isGoalDoc && typeof operation.values.status === "string") {
+        await validateGoalStatusTransition(projectRoot, target, existingParsed.data.status, operation.values.status, options.evidenceRoot);
       }
       const managedValues: Record<string, unknown> = { ...operation.values, timestamp: nowIso() };
       if (existingParsed.data.type === "Source" && operation.values.integration_status === "integrated" && managedValues.integrated_at === undefined) {

@@ -16,7 +16,7 @@ import { discoverSkills } from './discovery.js';
  * @param {boolean} [params.backup] If true, create backup of existing skill
  * @returns {{ success: boolean, targetPath: string, mode: 'symlink' | 'copy', backedUp?: string, error?: string }}
  */
-export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = true, dryRun = false, backup = false }) {
+export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = true, dryRun = false, backup = false, cwd = process.cwd() }) {
   const targetPath = path.join(destDir, skillName);
 
   if (!fs.existsSync(srcDir)) {
@@ -25,6 +25,16 @@ export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = tr
       targetPath,
       mode: useSymlink ? 'symlink' : 'copy',
       error: `Source directory does not exist: ${srcDir}`
+    };
+  }
+
+  // Safety check: Never install a skill directory onto itself
+  if (path.resolve(targetPath) === path.resolve(srcDir)) {
+    return {
+      success: false,
+      targetPath,
+      mode: useSymlink ? 'symlink' : 'copy',
+      error: `Refusing to install skill onto itself (source and destination paths are identical: ${srcDir})`
     };
   }
 
@@ -39,23 +49,100 @@ export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = tr
   let backedUpPath = null;
   fs.mkdirSync(destDir, { recursive: true });
 
+  // Inspect existing target
+  let exists = false;
+  let isSymlink = false;
+  let currentLinkTarget = null;
+
   try {
-    const exists = fs.existsSync(targetPath) || (fs.lstatSync(targetPath).isSymbolicLink?.() ?? false);
-    if (exists) {
-      if (backup) {
-        backedUpPath = `${targetPath}.bak-${Date.now()}`;
+    const stat = fs.lstatSync(targetPath);
+    exists = true;
+    isSymlink = stat.isSymbolicLink();
+    if (isSymlink) {
+      try {
+        currentLinkTarget = fs.readlinkSync(targetPath);
+      } catch (_) {}
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      return {
+        success: false,
+        targetPath,
+        mode: useSymlink ? 'symlink' : 'copy',
+        error: `Failed to inspect existing path ${targetPath}: ${err.message}`
+      };
+    }
+  }
+
+  // Idempotent symlink check: If already symlinked to the same source directory, skip re-linking
+  if (useSymlink && isSymlink && currentLinkTarget) {
+    const resolvedLink = path.resolve(path.dirname(targetPath), currentLinkTarget);
+    if (resolvedLink === path.resolve(srcDir)) {
+      return {
+        success: true,
+        targetPath,
+        mode: 'symlink',
+        alreadyInstalled: true
+      };
+    }
+  }
+
+  // Handle backup or removal of existing target
+  if (exists) {
+    if (backup) {
+      backedUpPath = `${targetPath}.bak-${Date.now()}`;
+      try {
         fs.renameSync(targetPath, backedUpPath);
-      } else {
-        fs.rmSync(targetPath, { recursive: true, force: true });
+      } catch (backupErr) {
+        return {
+          success: false,
+          targetPath,
+          mode: useSymlink ? 'symlink' : 'copy',
+          error: `Failed to create backup at ${backedUpPath}: ${backupErr.message}`
+        };
+      }
+    } else {
+      try {
+        if (isSymlink) {
+          try {
+            fs.unlinkSync(targetPath);
+          } catch (_) {
+            fs.rmSync(targetPath, { recursive: true, force: true });
+          }
+        } else {
+          fs.rmSync(targetPath, { recursive: true, force: true });
+        }
+      } catch (rmErr) {
+        return {
+          success: false,
+          targetPath,
+          mode: useSymlink ? 'symlink' : 'copy',
+          error: `Failed to remove existing file/directory at ${targetPath}: ${rmErr.message}`
+        };
       }
     }
-  } catch (_) {}
+  }
 
   // Symlink strategy
   if (useSymlink) {
     try {
-      const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
-      fs.symlinkSync(srcDir, targetPath, symlinkType);
+      let linkSource = path.resolve(srcDir);
+      const isWindows = process.platform === 'win32';
+      const symlinkType = isWindows ? 'junction' : 'dir';
+
+      if (!isWindows) {
+        // For POSIX: If both srcDir and destDir share the current working directory,
+        // create a clean relative symlink for maximum portability across repo clones/moves.
+        const absCwd = path.resolve(cwd);
+        const absSrc = path.resolve(srcDir);
+        const absTargetDir = path.resolve(destDir);
+
+        if (absSrc.startsWith(absCwd + path.sep) && absTargetDir.startsWith(absCwd + path.sep)) {
+          linkSource = path.relative(absTargetDir, absSrc);
+        }
+      }
+
+      fs.symlinkSync(linkSource, targetPath, symlinkType);
       return {
         success: true,
         targetPath,
@@ -65,7 +152,15 @@ export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = tr
     } catch (err) {
       // Symlink failed, attempt copy fallback
       try {
-        fs.cpSync(srcDir, targetPath, { recursive: true });
+        fs.mkdirSync(targetPath, { recursive: true });
+        fs.cpSync(srcDir, targetPath, {
+          recursive: true,
+          dereference: true,
+          filter: (src) => {
+            const base = path.basename(src);
+            return base !== 'node_modules' && base !== '.DS_Store' && base !== '.git';
+          }
+        });
         return {
           success: true,
           targetPath,
@@ -88,6 +183,7 @@ export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = tr
     fs.mkdirSync(targetPath, { recursive: true });
     fs.cpSync(srcDir, targetPath, {
       recursive: true,
+      dereference: true,
       filter: (src) => {
         const base = path.basename(src);
         return base !== 'node_modules' && base !== '.DS_Store' && base !== '.git';
@@ -118,10 +214,23 @@ export function installSingleSkill({ skillName, srcDir, destDir, useSymlink = tr
 export function removeSingleSkill(skillName, destDir) {
   const targetPath = path.join(destDir, skillName);
   try {
-    if (fs.existsSync(targetPath) || fs.lstatSync(targetPath).isSymbolicLink()) {
-      fs.rmSync(targetPath, { recursive: true, force: true });
+    let stat;
+    try {
+      stat = fs.lstatSync(targetPath);
+    } catch (e) {
+      if (e.code === 'ENOENT') return false;
+      throw e;
+    }
+    if (stat.isSymbolicLink()) {
+      try {
+        fs.unlinkSync(targetPath);
+      } catch (_) {
+        fs.rmSync(targetPath, { recursive: true, force: true });
+      }
       return true;
     }
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    return true;
   } catch (_) {}
   return false;
 }
@@ -135,7 +244,7 @@ export async function executeInstall(options) {
     repoRoot,
     skills = [],
     targets = ['universal'],
-    scope = 'global',
+    scope = 'project',
     method = 'symlink',
     dryRun = false,
     backup = false,
@@ -145,34 +254,67 @@ export async function executeInstall(options) {
   const discovered = discoverSkills(repoRoot);
   const discoveredMap = new Map(discovered.map(s => [s.id.toLowerCase(), s]));
 
-  const targetSkills = skills.length === 0 || skills.includes('all')
+  // Parse comma-separated or space-separated skills
+  const normalizedRequested = (Array.isArray(skills) ? skills : [skills])
+    .flatMap(s => typeof s === 'string' ? s.split(',') : s)
+    .map(s => typeof s === 'string' ? s.trim().toLowerCase() : s)
+    .filter(Boolean);
+
+  const isAll = normalizedRequested.length === 0 ||
+    normalizedRequested.includes('all') ||
+    normalizedRequested.includes('*');
+
+  const targetSkills = isAll
     ? discovered
-    : skills.map(name => discoveredMap.get(name.toLowerCase())).filter(Boolean);
+    : normalizedRequested.map(name => discoveredMap.get(name)).filter(Boolean);
 
   if (targetSkills.length === 0) {
     throw new Error(`No matching skills found to install. Available: ${discovered.map(s => s.id).join(', ')}`);
   }
 
-  const targetAgents = targets.map(t => typeof t === 'string' ? getAgent(t) : t).filter(Boolean);
+  // Resolve target agents
+  const normalizedTargets = (Array.isArray(targets) ? targets : [targets])
+    .flatMap(t => typeof t === 'string' ? t.split(',') : t)
+    .map(t => typeof t === 'string' ? t.trim().toLowerCase() : t)
+    .filter(Boolean);
+
+  let targetAgents = [];
+  if (normalizedTargets.length === 0 || normalizedTargets.includes('all')) {
+    targetAgents = [...AGENT_REGISTRY];
+  } else {
+    targetAgents = normalizedTargets.map(t => typeof t === 'string' ? getAgent(t) : t).filter(Boolean);
+  }
+
   if (targetAgents.length === 0) {
     throw new Error(`No valid agent targets provided. Available: ${AGENT_REGISTRY.map(a => a.id).join(', ')}`);
   }
 
   const results = [];
   const useSymlink = method === 'symlink';
+  const processedDestinations = new Map();
 
   for (const agent of targetAgents) {
     const destDir = resolveAgentDestination(agent, scope, cwd);
 
     for (const skill of targetSkills) {
-      const outcome = installSingleSkill({
-        skillName: skill.id,
-        srcDir: skill.skillDir,
-        destDir,
-        useSymlink,
-        dryRun,
-        backup
-      });
+      const destKey = `${path.resolve(destDir)}::${skill.id.toLowerCase()}`;
+      let outcome;
+
+      if (processedDestinations.has(destKey)) {
+        // Reuse outcome for duplicate destinations (e.g. universal and antigravity project paths)
+        outcome = processedDestinations.get(destKey);
+      } else {
+        outcome = installSingleSkill({
+          skillName: skill.id,
+          srcDir: skill.skillDir,
+          destDir,
+          useSymlink,
+          dryRun,
+          backup,
+          cwd
+        });
+        processedDestinations.set(destKey, outcome);
+      }
 
       results.push({
         agent: agent.id,
@@ -184,6 +326,7 @@ export async function executeInstall(options) {
         mode: outcome.mode,
         success: outcome.success,
         backedUp: outcome.backedUp,
+        alreadyInstalled: outcome.alreadyInstalled,
         error: outcome.error
       });
     }

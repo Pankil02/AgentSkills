@@ -33,6 +33,10 @@ async function temporaryProject(fixture = false): Promise<string> {
   return root;
 }
 
+async function readIfExists(path: string): Promise<string | undefined> {
+  return readFile(path, "utf8").catch(() => undefined);
+}
+
 async function markdownSnapshot(root: string): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   async function walk(current: string): Promise<void> {
@@ -75,18 +79,30 @@ test("path validation rejects traversal and absolute paths", () => {
   assert.throws(() => assertSafeRelativePath("/absolute"), /Unsafe/);
 });
 
-test("initialization creates mirrored tracked scopes and is byte-stable", async (t) => {
+test("initialization creates tracked scopes with agents.md and log.md only and is byte-stable", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
   const scopes = ["apps/api/src/domains/user", "apps/api/src/events", "apps/web/app/dashboard"];
   const first = await initializeBundle(root, scopes, { now: new Date("2026-01-01T00:00:00Z") });
   assert.deepEqual(first.scopes, [".", ...scopes].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b)));
-  for (const scope of ["", ...scopes]) {
-    for (const file of ["index.md", "goal.md", "progress.md", "log.md"]) {
-      assert.equal(typeof await readFile(join(root, ".memory", scope, file), "utf8"), "string");
+
+  // Root has all root core files
+  for (const file of ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"]) {
+    assert.equal(typeof await readFile(join(root, ".memory", file), "utf8"), "string");
+  }
+
+  // Each subfolder has ONLY agents.md and log.md
+  for (const scope of scopes) {
+    assert.equal(typeof await readFile(join(root, ".memory", scope, "agents.md"), "utf8"), "string");
+    assert.equal(typeof await readFile(join(root, ".memory", scope, "log.md"), "utf8"), "string");
+    for (const forbidden of ["goal.md", "progress.md", "tasks.md", "index.md"]) {
+      assert.equal(await readIfExists(join(root, ".memory", scope, forbidden)), undefined);
     }
   }
-  assert.equal(typeof await readFile(join(root, ".memory", "apps", "api", "src", "domains", "index.md"), "utf8"), "string");
+
+  // Intermediate prefixes do NOT have index.md
+  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "index.md")), undefined);
+
   const validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 
@@ -103,10 +119,8 @@ test("repository sync generates source, test, and fingerprint regions", async (t
   await initializeBundle(root, [scope]);
   const scan = await scanRepository(root);
   await syncIndexes(root, scan);
-  const index = await readFile(join(root, ".memory", scope, "index.md"), "utf8");
-  assert.match(index, /profile\.ts/);
-  assert.match(index, /profile\.test\.ts/);
-  assert.match(index, /memory:source-fingerprint sha256:/);
+  const agents = await readFile(join(root, ".memory", scope, "agents.md"), "utf8");
+  assert.match(agents, /memory:source-fingerprint sha256:/);
   const rootIndex = parseMarkdown(await readFile(join(root, ".memory", "index.md"), "utf8"));
   assert.equal(rootIndex.data.repository_fingerprint, scan.fingerprint);
 });
@@ -189,8 +203,8 @@ test("partial bundles rebuild missing indexes without changing valid documents",
   const customPath = join(root, ".memory", "src", "feature", "architecture.md");
   const custom = "---\ntype: Architecture\ntitle: Architecture\ndescription: Preserved document.\ntimestamp: 2026-01-01T00:00:00Z\nunknown: keep\n---\n# Architecture\n\nManual truth.\n";
   await writeFile(customPath, custom);
-  await rm(join(root, ".memory", "index.md"));
-  await rm(join(root, ".memory", "src", "index.md"));
+  await rm(join(root, ".memory", "index.md"), { force: true });
+  await rm(join(root, ".memory", "src", "index.md"), { force: true });
   await syncIndexes(root);
   assert.equal(await readFile(customPath, "utf8"), custom);
   assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.2"/);
@@ -478,8 +492,11 @@ test("initializeBundle with deep scan auto-scaffolds candidate scopes and popula
   assert.match(rootGoal, /Next\.js/);
   assert.match(rootGoal, /DATABASE_URL/);
 
-  const scopeGoal = await readFile(join(root, ".memory", "apps", "api", "src", "domains", "user", "goal.md"), "utf8");
-  assert.match(scopeGoal, /Auto-scaffolded scope for `apps\/api\/src\/domains\/user`/);
+  const scopeAgents = await readFile(join(root, ".memory", "apps", "api", "src", "domains", "user", "agents.md"), "utf8");
+  assert.match(scopeAgents, /Auto-scaffolded scope for `apps\/api\/src\/domains\/user`/);
+  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "goal.md")), undefined);
+  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "progress.md")), undefined);
+  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "tasks.md")), undefined);
 
   const validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
@@ -523,11 +540,17 @@ test("validation enforces hard byte budgets on root index and scope index", asyn
   await writeFile(join(root, ".memory", "index.md"), originalIndex);
 
   // 2. Scope index error (> 8000)
-  const originalScopeIndex = await readFile(join(root, ".memory", "src", "feature", "index.md"), "utf8");
-  await writeFile(join(root, ".memory", "src", "feature", "index.md"), `${originalScopeIndex}\n<!-- pad -->\n${"x".repeat(8_500)}`);
+  await writeFile(join(root, ".memory", "src", "feature", "index.md"), `# Feature\n<!-- pad -->\n${"x".repeat(8_500)}`);
   validation = await validateBundle(root);
   assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((d) => d.code === "budget-scope-index" && d.severity === "error"));
+
+  // 3. Subfolder cannot contain goal.md, progress.md, or tasks.md
+  await rm(join(root, ".memory", "src", "feature", "index.md"), { force: true });
+  await writeFile(join(root, ".memory", "src", "feature", "goal.md"), "# Sub Goal");
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "root-only-file" && d.severity === "error"));
 });
 
 test("validation enforces active tasks limit and document size warnings", async (t) => {
@@ -749,6 +772,128 @@ scope: .
   }
 
   // Post-migration validation succeeds
+  validation = await validateBundle(root);
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+});
+
+test("0.2 migration shifts legacy subfolder goal, progress, tasks into agents.md and logs event", async (t) => {
+  const root = await temporaryProject(true);
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const scope = "apps/api/src/domains/user";
+  await initializeBundle(root, [scope]);
+
+  // Simulate legacy bundle: remove agents.md, put goal.md, progress.md, tasks.md, index.md in subfolder
+  const scopeDir = join(root, ".memory", scope);
+  await rm(join(scopeDir, "agents.md"), { force: true });
+
+  await writeFile(join(scopeDir, "goal.md"), `---
+type: Goal
+title: User Domain Goal
+description: User domain goal description.
+timestamp: 2026-01-01T00:00:00Z
+scope: ${scope}
+status: active
+provenance: observed
+uid: 00000000-0000-0000-0000-000000000010
+---
+# User Domain Goal
+
+## Motivation
+Migrated user domain motivation.
+
+## Requirements
+- REQ-001: Support user profile edits.
+
+## Acceptance criteria
+- AC-001: Verified user profile save works.
+`);
+
+  await writeFile(join(scopeDir, "progress.md"), `---
+type: Progress
+title: User Domain Progress
+description: Progress for user domain.
+timestamp: 2026-01-01T00:00:00Z
+scope: ${scope}
+---
+# User Domain Progress
+
+## Current state
+Profile editing in progress.
+
+## Blockers & drift
+none
+
+## Acceptance evidence
+| Criterion | Status | Evidence |
+|---|---|---|
+| AC-001 | verified | repo://apps/api/src/domains/user/profile.test.ts |
+
+## Next action
+- **Action:** Add profile avatar upload
+- **File / Command:** Edit apps/api/src/domains/user/profile.ts
+- **Time estimate:** [20 min]
+- **Requirement:** REQ-001
+- **Likely files:** \`apps/api/src/domains/user/profile.ts\`
+- **Verification:** bun test
+- **Approval:** approved
+`);
+
+  await writeFile(join(scopeDir, "tasks.md"), `---
+type: Tasks
+title: User Domain Tasks
+description: Tasks for user domain.
+timestamp: 2026-01-01T00:00:00Z
+scope: ${scope}
+---
+# Tasks
+
+## Single next action
+- **Action:** Add profile avatar upload
+- **File / Command:** Edit apps/api/src/domains/user/profile.ts
+- **Time estimate:** [20 min]
+- **Requirement:** REQ-001
+- **Likely files:** \`apps/api/src/domains/user/profile.ts\`
+- **Verification:** bun test
+- **Approval:** approved
+
+## Active tasks (Do Now)
+1. [ ] **Avatar upload** \`[20 min]\` (REQ-001) — Implement avatar endpoint
+`);
+
+  await writeFile(join(scopeDir, "index.md"), `# User Domain Index\n`);
+
+  // Validation must fail before migration due to root-only files in subfolder
+  let validation = await validateBundle(root);
+  assert.equal(validation.ok, false);
+  assert(validation.diagnostics.some((d) => d.code === "root-only-file"));
+
+  // Run migration
+  const result = await migrateBundle(root);
+  assert.equal(result.validation.ok, true, JSON.stringify(result.validation.diagnostics));
+
+  // Legacy files must be removed
+  assert.equal(await readIfExists(join(scopeDir, "goal.md")), undefined);
+  assert.equal(await readIfExists(join(scopeDir, "progress.md")), undefined);
+  assert.equal(await readIfExists(join(scopeDir, "tasks.md")), undefined);
+  assert.equal(await readIfExists(join(scopeDir, "index.md")), undefined);
+
+  // agents.md must contain all shifted data
+  const agentsContent = await readFile(join(scopeDir, "agents.md"), "utf8");
+  assert.match(agentsContent, /Migrated user domain motivation/);
+  assert.match(agentsContent, /REQ-001: Support user profile edits/);
+  assert.match(agentsContent, /AC-001: Verified user profile save works/);
+  assert.match(agentsContent, /Profile editing in progress/);
+  assert.match(agentsContent, /repo:\/\/apps\/api\/src\/domains\/user\/profile\.test\.ts/);
+  assert.match(agentsContent, /Add profile avatar upload/);
+  assert.match(agentsContent, /Avatar upload/);
+
+  // log.md must contain migration entry
+  const logContent = await readFile(join(scopeDir, "log.md"), "utf8");
+  assert.match(logContent, /Migration: Scope Restructure/);
+  assert.match(logContent, /Migrated legacy subfolder files/);
+
+  // Validation must pass cleanly
   validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 });

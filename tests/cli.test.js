@@ -147,6 +147,103 @@ describe('AgentSkills Enterprise Suite', () => {
       assert.equal(installResult.mode, 'symlink');
       assert.ok(fs.existsSync(path.join(destDir, 'software-design-patterns', 'SKILL.md')));
     });
+
+    it('should refuse to install a skill onto itself to prevent self-deletion', () => {
+      const srcDir = path.join(REPO_ROOT, 'software-design-patterns');
+      const destDir = REPO_ROOT; // targetPath would be REPO_ROOT/software-design-patterns === srcDir
+
+      const result = installSingleSkill({
+        skillName: 'software-design-patterns',
+        srcDir,
+        destDir,
+        useSymlink: true,
+        dryRun: false
+      });
+
+      assert.equal(result.success, false);
+      assert.match(result.error, /Refusing to install skill onto itself/);
+    });
+
+    it('should be idempotent and recognize already-linked skills', () => {
+      const destDir = path.join(tempDir, 'idempotent-agent-skills');
+      const srcDir = path.join(REPO_ROOT, 'software-design-patterns');
+
+      const first = installSingleSkill({
+        skillName: 'software-design-patterns',
+        srcDir,
+        destDir,
+        useSymlink: true
+      });
+      assert.equal(first.success, true);
+
+      const second = installSingleSkill({
+        skillName: 'software-design-patterns',
+        srcDir,
+        destDir,
+        useSymlink: true
+      });
+      assert.equal(second.success, true);
+      assert.equal(second.alreadyInstalled, true);
+    });
+
+    it('should safely overwrite broken symlinks', () => {
+      const destDir = path.join(tempDir, 'broken-link-skills');
+      const targetPath = path.join(destDir, 'software-design-patterns');
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.symlinkSync('/nonexistent/path/for/test', targetPath, 'dir');
+
+      assert.equal(fs.existsSync(targetPath), false);
+      assert.equal(fs.lstatSync(targetPath).isSymbolicLink(), true);
+
+      const res = installSingleSkill({
+        skillName: 'software-design-patterns',
+        srcDir: path.join(REPO_ROOT, 'software-design-patterns'),
+        destDir,
+        useSymlink: true
+      });
+
+      assert.equal(res.success, true);
+      assert.equal(fs.existsSync(path.join(targetPath, 'SKILL.md')), true);
+    });
+
+    it('should handle comma-separated skills and target all with deduplication', async () => {
+      const result = await executeInstall({
+        repoRoot: REPO_ROOT,
+        skills: ['project-memory,software-design-patterns'],
+        targets: ['all'],
+        scope: 'project',
+        method: 'symlink',
+        dryRun: false,
+        cwd: tempDir
+      });
+
+      assert.equal(result.scope, 'project');
+      assert.ok(result.totalInstalled > 0);
+      assert.ok(fs.existsSync(path.join(tempDir, '.agents', 'skills', 'project-memory', 'SKILL.md')));
+      assert.ok(fs.existsSync(path.join(tempDir, '.agents', 'skills', 'software-design-patterns', 'SKILL.md')));
+    });
+
+    it('should create relative symlinks when both paths are inside cwd', () => {
+      const projectRoot = path.join(tempDir, 'rel-project');
+      const fakeSrc = path.join(projectRoot, 'skills-src', 'my-skill');
+      const fakeDest = path.join(projectRoot, '.agents', 'skills');
+      fs.mkdirSync(fakeSrc, { recursive: true });
+      fs.writeFileSync(path.join(fakeSrc, 'SKILL.md'), 'test');
+
+      const res = installSingleSkill({
+        skillName: 'my-skill',
+        srcDir: fakeSrc,
+        destDir: fakeDest,
+        useSymlink: true,
+        cwd: projectRoot
+      });
+
+      assert.equal(res.success, true);
+      if (process.platform !== 'win32') {
+        const link = fs.readlinkSync(res.targetPath);
+        assert.ok(!path.isAbsolute(link), `Expected relative link, got: ${link}`);
+      }
+    });
   });
 
   describe('Doctor & Health Diagnostic', () => {

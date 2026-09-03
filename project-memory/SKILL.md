@@ -19,7 +19,7 @@ Durable project wiki in `.memory/`. Linked, human-readable Markdown brain for LL
 ## Quick Commands
 
 - **Init**: `memory init` (or `memory init --deep` for full code scan, `memory init --scope <path>`)
-- **Migrate**: `memory migrate` (upgrades 0.1 legacy bundle to 0.2 architecture lenses)
+- **Migrate**: `memory migrate` (upgrades legacy bundles: shifts subfolder goal/progress/tasks into `agents.md`, updates `log.md`, and adds 0.2 architecture lenses — see `references/upgrade.md`)
 - **Status**: `memory status --toon`
 - **Validate**: `memory validate`
 - **Record Source**: `memory record --source <path|url> --json`
@@ -29,15 +29,22 @@ Durable project wiki in `.memory/`. Linked, human-readable Markdown brain for LL
 ## Start Every Task (DDD & Architecture Route)
 
 1. Read `.memory/index.md` executive router (< 4 KB budget).
-2. Follow routing path: System Flow (`.memory/architecture/system-design/Flow.md`) → relevant layer `Flow.md` (`frontend`, `backend`, `domain`, `security`, etc.) → target scope's `goal.md`, `progress.md`, and `tasks.md`.
+2. Follow routing path: System Flow (`.memory/architecture/system-design/Flow.md`) → relevant layer `Flow.md` (`frontend`, `backend`, `domain`, `security`, etc.) → target scope's `agents.md` (or root `goal.md`, `progress.md`, and `tasks.md`).
 3. **Mandatory DDD Gate**: Before implementing any task, check and verify the domain bounded context, ubiquitous language terms, and business invariants in domain logic.
 4. Treat approved wants, must-nots, non-goals, acceptance criteria, and corrections as binding requirements.
 5. Use wiki context before broad repository exploration.
 6. If memory is missing or stale, stop and ask rather than guessing intent.
 
+## Bundle Structure & Scope Layout
+
+- **Root `.memory/`**: Strictly contains `index.md`, `goal.md`, `progress.md`, `tasks.md`, `log.md`, `sources/`, and `architecture/`. `goal.md`, `progress.md`, and `tasks.md` exist ONLY at root.
+- **Subfolder Scopes**: Each tracked subfolder contains **ONLY and ONLY** `agents.md` and `log.md`.
+- **Scope `agents.md`**: Unifies scope architecture/summary, goal requirements (with `AC-NNN` criteria), current progress (with acceptance evidence), and ADHD tasks (single next action, active tasks ≤ 5, backlog).
+- **Upgrades & Migration**: For legacy bundles with subfolder `goal.md`/`progress.md`/`tasks.md`, run `memory migrate` to automatically shift data into `agents.md` and `log.md`. See `UPGRADE.md` and `references/upgrade.md`.
+
 ## Core ADHD Principles for Memory
 
-- **Lead with next action**: Place single concrete next action (exact file path or command) first in `progress.md`, `tasks.md`, and status updates.
+- **Lead with next action**: Place single concrete next action (exact file path or command) first in `progress.md`, `tasks.md`, scope `agents.md`, and status updates.
 - **Cap active tasks at 5**: Maximum 5 active items in `tasks.md` under `## Active tasks (Do Now)`; overflow moves to backlog.
 - **Numbered single-bounded steps**: Step lists must be strictly numbered single actions with zero compound "and then" clauses.
 - **Restate state on updates**: Format every status update as `Step X of Y done: <completed item>. Next: <concrete action>`.

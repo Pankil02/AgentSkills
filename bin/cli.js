@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import pc from 'picocolors';
-import { AGENT_REGISTRY, getAgent } from '../src/agents.js';
+import { AGENT_REGISTRY, getAgent, resolveAgentDestination } from '../src/agents.js';
 import { discoverSkills } from '../src/discovery.js';
 import { runDoctor, printDoctorReport } from '../src/doctor.js';
 import { executeInstall, runInteractiveWizard, removeSingleSkill } from '../src/installer.js';
@@ -65,13 +65,17 @@ async function main() {
       scope: { type: 'string' },
       target: { type: 'string', short: 't' },
       symlink: { type: 'boolean', short: 's' },
-      copy: { type: 'boolean' },
+      link: { type: 'boolean', short: 'l' },
+      copy: { type: 'boolean', short: 'c' },
       yes: { type: 'boolean', short: 'y' },
-      'dry-run': { type: 'boolean' },
+      'dry-run': { type: 'boolean', short: 'd' },
       json: { type: 'boolean' },
-      backup: { type: 'boolean' },
+      backup: { type: 'boolean', short: 'b' },
+      project: { type: 'boolean', short: 'p' },
       local: { type: 'boolean' },
-      global: { type: 'boolean', short: 'g' }
+      global: { type: 'boolean', short: 'g' },
+      all: { type: 'boolean', short: 'a' },
+      force: { type: 'boolean', short: 'f' }
     }
   });
 
@@ -85,7 +89,18 @@ async function main() {
     return;
   }
 
-  const command = positionals[0] || 'install';
+  const KNOWN_COMMANDS = new Set([
+    'install', 'add',
+    'list', 'ls',
+    'doctor', 'check',
+    'validate',
+    'uninstall', 'remove',
+    'help', 'version'
+  ]);
+
+  const firstArg = positionals[0];
+  const isKnownCommand = firstArg && KNOWN_COMMANDS.has(firstArg.toLowerCase());
+  const command = isKnownCommand ? firstArg.toLowerCase() : 'install';
 
   // 1. LIST COMMAND
   if (command === 'list' || command === 'ls') {
@@ -148,43 +163,73 @@ async function main() {
 
   // 4. UNINSTALL COMMAND
   if (command === 'uninstall' || command === 'remove') {
-    const skillsToRemove = positionals.slice(1);
+    const rawRemoveArgs = isKnownCommand ? positionals.slice(1) : positionals;
+    const skillsToRemove = rawRemoveArgs
+      .flatMap(s => s.split(','))
+      .map(s => s.trim())
+      .filter(Boolean);
+
     if (skillsToRemove.length === 0) {
       console.error(pc.red('Error: Please specify one or more skills to remove.'));
       process.exit(1);
     }
 
-    const targetAgentId = values.target || 'universal';
-    const agent = getAgent(targetAgentId);
-    if (!agent) {
-      console.error(pc.red(`Error: Unknown agent target "${targetAgentId}".`));
-      process.exit(1);
-    }
+    const scope = values.global ? 'global' : (values.project || values.local ? 'project' : (values.scope || 'project'));
 
-    const scope = values.global ? 'global' : (values.scope || 'project');
-    const destDir = scope === 'project' ? agent.resolveProjectPath() : agent.resolveGlobalPath();
-
-    let removed = 0;
-    for (const skill of skillsToRemove) {
-      if (removeSingleSkill(skill, destDir)) {
-        console.log(pc.green(`✓ Removed "${skill}" from ${destDir}`));
-        removed++;
+    let targetAgentIds = ['universal'];
+    if (values.target) {
+      if (values.target.toLowerCase() === 'all') {
+        targetAgentIds = AGENT_REGISTRY.map(a => a.id);
       } else {
-        console.log(pc.yellow(`⚠️ Skill "${skill}" was not found in ${destDir}`));
+        targetAgentIds = values.target.split(',').map(t => t.trim().toLowerCase());
       }
     }
 
-    console.log(pc.bold(`\nFinished. Removed ${removed} skill(s).\n`));
+    let removedTotal = 0;
+    const processedDestinations = new Set();
+
+    for (const targetId of targetAgentIds) {
+      const agent = getAgent(targetId);
+      if (!agent) {
+        console.warn(pc.yellow(`⚠️ Unknown agent target "${targetId}", skipping.`));
+        continue;
+      }
+
+      const destDir = resolveAgentDestination(agent, scope, process.cwd());
+      if (processedDestinations.has(destDir)) continue;
+      processedDestinations.add(destDir);
+
+      for (const skill of skillsToRemove) {
+        if (removeSingleSkill(skill, destDir)) {
+          console.log(pc.green(`✓ Removed "${skill}" from ${agent.name} (${destDir})`));
+          removedTotal++;
+        } else {
+          console.log(pc.yellow(`⚠️ Skill "${skill}" was not found in ${destDir}`));
+        }
+      }
+    }
+
+    console.log(pc.bold(`\nFinished. Removed ${removedTotal} skill target(s).\n`));
     return;
   }
 
   // 5. INSTALL / ADD COMMAND
   if (command === 'install' || command === 'add') {
-    const requestedSkills = positionals.slice(command === 'install' || command === 'add' ? 1 : 0);
+    const rawSkillArgs = isKnownCommand ? positionals.slice(1) : positionals;
+    let requestedSkills = rawSkillArgs
+      .flatMap(s => s.split(','))
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    if (values.all) {
+      requestedSkills = ['all'];
+    }
 
     // If no specific flags or positional arguments provided AND running in an interactive TTY, launch Wizard
+    const hasFlags = values.yes || values.json || values.target || values.scope ||
+      values.global || values.project || values.local || values.symlink || values.link || values.copy || values.all;
     const isInteractive = !values.yes && !values.json && process.stdout.isTTY &&
-      requestedSkills.length === 0 && !values.target && !values.scope;
+      requestedSkills.length === 0 && !hasFlags;
 
     if (isInteractive) {
       await runInteractiveWizard({ repoRoot: REPO_ROOT, cwd: process.cwd() });
@@ -192,8 +237,9 @@ async function main() {
     }
 
     // Headless / Non-Interactive Execution
-    const scope = values.global ? 'global' : (values.local ? 'project' : (values.scope || 'global'));
-    const method = values.copy ? 'copy' : 'symlink';
+    const scope = values.global ? 'global' : (values.project || values.local ? 'project' : (values.scope || 'project'));
+    const useSymlink = values.copy ? false : true;
+    const method = useSymlink ? 'symlink' : 'copy';
 
     let targets = ['universal'];
     if (values.target) {
@@ -227,7 +273,8 @@ async function main() {
 
       for (const item of result.results) {
         const icon = item.success ? pc.green('✓') : pc.red('✗');
-        console.log(`  ${icon} ${pc.bold(item.skill)} -> ${pc.cyan(item.agentName)}`);
+        const stateNote = item.alreadyInstalled ? pc.dim(' (up-to-date)') : '';
+        console.log(`  ${icon} ${pc.bold(item.skill)} -> ${pc.cyan(item.agentName)}${stateNote}`);
         console.log(`    ${pc.dim('Path:')} ${item.targetPath} (${item.mode})`);
         if (item.backedUp) {
           console.log(`    ${pc.yellow('Backup:')} ${item.backedUp}`);

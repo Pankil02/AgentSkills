@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { access, cp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { linkOrCopy as baseLinkOrCopy } from "./install-utils.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -23,21 +24,7 @@ const workflowFiles = [
   "mem-tasks.md", "memory-tasks.md",
 ];
 
-async function linkOrCopy(source, target, isDir = false) {
-  await mkdir(dirname(target), { recursive: true });
-  await rm(target, { recursive: true, force: true });
-  if (useSymlink) {
-    try {
-      const symlinkType = isDir ? (process.platform === "win32" ? "junction" : "dir") : "file";
-      await symlink(source, target, symlinkType);
-      return "symlinked";
-    } catch {
-      // Fallback to copy if symlinking fails
-    }
-  }
-  await cp(source, target, { recursive: isDir, force: true });
-  return "copied";
-}
+const linkOrCopy = (source, target, isDir = false) => baseLinkOrCopy(source, target, isDir, useSymlink);
 
 const force = process.argv.includes("--force") || process.argv.includes("-f") || useSymlink;
 const hookNames = ["project-memory-context", "project-memory-write-guard", "project-memory-stale-reminder"];
@@ -103,12 +90,15 @@ for (const file of workflowFiles) {
   await linkOrCopy(join(packageRoot, "workflows", file), join(agentsRoot, "workflows", file), false);
 }
 
-try {
-  await mkdir(dirname(globalSkillsRoot), { recursive: true });
-  const globalMode = await linkOrCopy(join(packageRoot, "skills", "memory"), globalSkillsRoot, true);
-  process.stdout.write(`Installed global Project Memory skill (${globalMode}) at ${globalSkillsRoot}\n`);
-} catch {
-  // Ignore error if global dir isn't accessible
+const isGlobal = process.argv.includes("--global") || process.argv.includes("-g");
+if (isGlobal) {
+  try {
+    await mkdir(dirname(globalSkillsRoot), { recursive: true });
+    const globalMode = await linkOrCopy(join(packageRoot, "skills", "memory"), globalSkillsRoot, true);
+    process.stdout.write(`Installed global Project Memory skill (${globalMode}) at ${globalSkillsRoot}\n`);
+  } catch {
+    // Ignore error if global dir isn't accessible
+  }
 }
 
 const temporaryHooksPath = `${hooksPath}.${process.pid}.tmp`;

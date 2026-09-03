@@ -9,6 +9,8 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "types": ["node"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "skipLibCheck": true
   },
   "include": [
