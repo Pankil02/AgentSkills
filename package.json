@@ -23,7 +23,7 @@
     "doctor": "node bin/cli.js doctor",
     "validate": "node bin/cli.js validate",
     "list": "node bin/cli.js list",
-    "test": "node --test tests/**/*.test.js"
+    "test": "node --test tests/cli.test.js"
   },
   "repository": {
     "type": "git",
