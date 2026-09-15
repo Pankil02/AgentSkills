@@ -150,7 +150,7 @@ node bin/cli.js install all --scope project --symlink --yes
 
 ### `project-memory`
 - **Goal**: Maintain durable project intent, decisions, architecture maps, and task queues in `.memory/`.
-- **Primary Agent Command**: Read `.memory/index.md` on startup; keep active tasks capped at 5; log append-only milestones.
+- **Primary Agent Command**: Read `.memory/index.md` on startup; run `memory check --for-path <file>` before editing code; run `memory search <query>` before authoring concepts; keep active tasks capped at 5; log append-only milestones.
 
 ### `software-design-patterns`
 - **Goal**: Pragmatic problem-to-option decision tree for software design and architecture.

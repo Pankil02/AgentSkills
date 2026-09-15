@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import {
   applyMemoryPlan,
   buildMemoryContext,
+  checkPathGovernance,
   discoverTrackedScopes,
   generateMemoryMap,
   getMemoryStatus,
@@ -15,12 +16,15 @@ import {
   refreshRegisteredSources,
   registerSource,
   registerTextSource,
+  searchMemory,
   syncAgentsFile,
   syncIndexes,
   validateBundle,
   withBundleLock,
   MAX_AUTO_CONTEXT_BYTES,
   type MemoryPlan,
+  type PathGovernanceResult,
+  type SearchResult,
 } from "./bundle.ts";
 import {
   changedRepositoryPaths,
@@ -52,6 +56,8 @@ Usage:
   migrate              Safely upgrade legacy Project Memory bundles to 0.2
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
+  search               Lexical BM25 search across all .memory documents
+  check                Inspect governance holds, constraints, and scope for a code path
   context              Emit the exact context agents should receive
   map                  Generate on-demand codebase treemap & architecture layout
   record               Register a source and/or append a history event
@@ -62,6 +68,11 @@ Usage:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
+  --for-path <path>     Target repository file path for check command
+  --query <text>        Search query keywords (optional; positional query supported)
+  --limit <number>      Maximum search results to return (default: 10)
+  --drift               Check description and semantic drift during validate
+  --strict              Elevate broken links and orphans to errors during validate
   --budget <bytes>      Byte budget for context command (default: 6000)
   --deep                Perform deep codebase ingestion scan during init (default)
   --shallow             Perform skeleton init without deep codebase scan
@@ -89,6 +100,11 @@ function parseArguments(argv: string[]): ParsedArguments {
     options: {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
+      "for-path": { type: "string" },
+      query: { type: "string" },
+      limit: { type: "string" },
+      drift: { type: "boolean" },
+      strict: { type: "boolean" },
       budget: { type: "string" },
       deep: { type: "boolean" },
       source: { type: "string", multiple: true },
@@ -117,9 +133,37 @@ const enabled = (args: ParsedArguments, name: string) => args.flags[name] === tr
 
 export function formatToon(value: unknown): string {
   if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "results:none";
+    if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
+      const items = value as SearchResult[];
+      const lines = items.map((item) => `  ${item.score.toFixed(2)}|${item.relPath}|${item.title}|${item.snippet.replace(/\n/g, " ")}`);
+      return `search_results[score|path|title|snippet]:\n${lines.join("\n")}`;
+    }
+  }
   if (typeof value !== "object") return String(value);
 
   const object = value as Record<string, unknown>;
+
+  if ("targetPath" in object && "governance" in object && "governingDocuments" in object) {
+    const res = object as unknown as PathGovernanceResult;
+    const lines = [
+      `path:${res.targetPath}|governance:${res.governance}|holds:${res.holds.length}|docs:${res.governingDocuments.length}`,
+    ];
+    if (res.holds.length > 0) {
+      lines.push("holds[path|reason]:");
+      for (const h of res.holds) lines.push(`  ${h.path}|${h.reason ?? "none"}`);
+    }
+    if (res.governingDocuments.length > 0) {
+      lines.push("docs[path|type|governance]:");
+      for (const d of res.governingDocuments) lines.push(`  ${d.path}|${d.type}|${d.governance ?? "active"}`);
+    }
+    if (res.constraints.length > 0) {
+      lines.push("constraints:");
+      for (const c of res.constraints) lines.push(`  - ${c}`);
+    }
+    return lines.join("\n");
+  }
 
   if ("diagnostics" in object && "counts" in object) {
     const counts = object.counts as Record<string, number>;
@@ -170,8 +214,45 @@ export function formatToon(value: unknown): string {
 }
 
 function summarize(value: unknown): string {
-  if (!value || typeof value !== "object") return String(value);
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "No results found.";
+    if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
+      const items = value as SearchResult[];
+      const lines = [`Found ${items.length} matching document(s):`];
+      for (const item of items) {
+        lines.push(`- [${item.score.toFixed(2)}] ${item.relPath} (${item.title}) [${item.matchedField}]`);
+        lines.push(`  Snippet: ${item.snippet.replace(/\s+/g, " ").trim()}`);
+      }
+      return lines.join("\n");
+    }
+  }
+  if (typeof value !== "object") return String(value);
   const object = value as Record<string, unknown>;
+
+  if ("targetPath" in object && "governance" in object && "governingDocuments" in object) {
+    const res = object as unknown as PathGovernanceResult;
+    const lines = [
+      `Path: ${res.targetPath}`,
+      `Governance: ${res.governance.toUpperCase()}`,
+    ];
+    if (res.holds.length > 0) {
+      lines.push(`⚠️ ACTIVE HOLDS (${res.holds.length}):`);
+      for (const h of res.holds) lines.push(`- ${h.path}: ${h.reason ?? "Subsystem frozen by governance"}`);
+    }
+    if (res.governingDocuments.length > 0) {
+      lines.push(`Governing Documents (${res.governingDocuments.length}):`);
+      for (const doc of res.governingDocuments) {
+        lines.push(`- ${doc.path} (${doc.type}) [${doc.governance ?? "active"}]`);
+      }
+    }
+    if (res.constraints.length > 0) {
+      lines.push(`Constraints & Invariants (${res.constraints.length}):`);
+      for (const c of res.constraints) lines.push(`- ${c}`);
+    }
+    return lines.join("\n");
+  }
+
   if ("diagnostics" in object && "counts" in object) {
     const counts = object.counts as Record<string, number>;
     const diagnostics = object.diagnostics as Array<{ severity: string; path?: string; message: string }>;
@@ -339,8 +420,25 @@ export async function runCli(argv: string[], io: CliIO = {
         result = dryRun ? await mutate() : await withBundleLock(root, mutate);
         break;
       }
+      case "search": {
+        const query = [flag(args, "query"), ...args.positional].filter(Boolean).join(" ");
+        if (!query.trim()) throw new Error("search requires a query string");
+        const limitStr = flag(args, "limit");
+        const limit = limitStr ? parseInt(limitStr, 10) : 10;
+        const scope = flag(args, "scope");
+        result = await searchMemory(root, query, { limit, scope });
+        break;
+      }
+      case "check": {
+        const targetPath = flag(args, "for-path") ?? args.positional[0];
+        if (!targetPath) throw new Error("check requires --for-path <path> or positional path");
+        result = await checkPathGovernance(root, targetPath);
+        break;
+      }
       case "validate": {
-        result = await validateBundle(root);
+        const drift = enabled(args, "drift");
+        const strict = enabled(args, "strict");
+        result = await validateBundle(root, { drift, strict });
         break;
       }
       case "agents-sync": {

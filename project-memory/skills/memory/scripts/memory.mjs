@@ -9433,7 +9433,188 @@ function checkActiveTasksBudget(content, rel, diagnostics) {
     }
   }
 }
-async function validateBundle(projectRoot) {
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "about",
+  "above",
+  "after",
+  "again",
+  "against",
+  "all",
+  "am",
+  "an",
+  "and",
+  "any",
+  "are",
+  "aren't",
+  "as",
+  "at",
+  "be",
+  "because",
+  "been",
+  "before",
+  "being",
+  "below",
+  "between",
+  "both",
+  "but",
+  "by",
+  "can't",
+  "cannot",
+  "could",
+  "couldn't",
+  "did",
+  "didn't",
+  "do",
+  "does",
+  "doesn't",
+  "doing",
+  "don't",
+  "down",
+  "during",
+  "each",
+  "few",
+  "for",
+  "from",
+  "further",
+  "had",
+  "hadn't",
+  "has",
+  "hasn't",
+  "have",
+  "haven't",
+  "having",
+  "he",
+  "he'd",
+  "he'll",
+  "he's",
+  "her",
+  "here",
+  "here's",
+  "hers",
+  "herself",
+  "him",
+  "himself",
+  "his",
+  "how",
+  "how's",
+  "i",
+  "i'd",
+  "i'll",
+  "i'm",
+  "i've",
+  "if",
+  "in",
+  "into",
+  "is",
+  "isn't",
+  "it",
+  "it's",
+  "its",
+  "itself",
+  "let's",
+  "me",
+  "more",
+  "most",
+  "mustn't",
+  "my",
+  "myself",
+  "no",
+  "nor",
+  "not",
+  "of",
+  "off",
+  "on",
+  "once",
+  "only",
+  "or",
+  "other",
+  "ought",
+  "our",
+  "ours",
+  "ourselves",
+  "out",
+  "over",
+  "own",
+  "same",
+  "shan't",
+  "she",
+  "she'd",
+  "she'll",
+  "she's",
+  "should",
+  "shouldn't",
+  "so",
+  "some",
+  "such",
+  "than",
+  "that",
+  "that's",
+  "the",
+  "their",
+  "theirs",
+  "them",
+  "themselves",
+  "then",
+  "there",
+  "there's",
+  "these",
+  "they",
+  "they'd",
+  "they'll",
+  "they're",
+  "they've",
+  "this",
+  "those",
+  "through",
+  "to",
+  "too",
+  "under",
+  "until",
+  "up",
+  "very",
+  "was",
+  "wasn't",
+  "we",
+  "we'd",
+  "we'll",
+  "we're",
+  "we've",
+  "were",
+  "weren't",
+  "what",
+  "what's",
+  "when",
+  "when's",
+  "where",
+  "where's",
+  "which",
+  "while",
+  "who",
+  "who's",
+  "whom",
+  "why",
+  "why's",
+  "with",
+  "won't",
+  "would",
+  "wouldn't",
+  "you",
+  "you'd",
+  "you'll",
+  "you're",
+  "you've",
+  "your",
+  "yours",
+  "yourself",
+  "yourselves"
+]);
+function tokenize(text) {
+  if (!text) return [];
+  const words = text.toLowerCase().match(/[a-z0-9_-]+/g) ?? [];
+  return words.filter((w) => w.length > 1 && !STOP_WORDS.has(w));
+}
+async function validateBundle(projectRoot, options) {
   const root = resolve2(projectRoot);
   const memoryRoot = bundlePath(root);
   const diagnostics = [];
@@ -9490,6 +9671,7 @@ async function validateBundle(projectRoot) {
     currentScan = await scanRepository(root);
   } catch {
   }
+  const fileGraph = /* @__PURE__ */ new Map();
   const scopeDirectories = /* @__PURE__ */ new Set();
   let sourceCount = 0;
   for (const path of walk.files) {
@@ -9524,6 +9706,49 @@ async function validateBundle(projectRoot) {
     if (!reserved && !rootIndexFile) {
       if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "frontmatter", path: rel, message: parsed.errors.join("; ") || "Document requires YAML frontmatter" });
       else if (typeof parsed.data.type !== "string" || !parsed.data.type.trim()) diagnostics.push({ severity: "error", code: "type", path: rel, message: "Document frontmatter requires a non-empty type" });
+    }
+    if (parsed.data.trust_tier !== void 0) {
+      const tier = parsed.data.trust_tier;
+      if (typeof tier !== "string" || !["generated", "verified", "human_authored"].includes(tier)) {
+        diagnostics.push({ severity: "error", code: "invalid-trust-tier", path: rel, message: `Invalid trust_tier: '${String(tier)}'. Must be 'generated', 'verified', or 'human_authored'` });
+      }
+    }
+    if (parsed.data.generated !== void 0) {
+      const gen = parsed.data.generated;
+      if (!gen || typeof gen !== "object" || typeof gen.by !== "string" || !gen.by.trim() || typeof gen.at !== "string" || !gen.at.trim() || Number.isNaN(Date.parse(gen.at))) {
+        diagnostics.push({ severity: "error", code: "invalid-generated-metadata", path: rel, message: "Generated metadata requires non-empty 'by' and valid ISO date 'at'" });
+      }
+    }
+    if (parsed.data.verified !== void 0) {
+      const ver = parsed.data.verified;
+      if (!ver || typeof ver !== "object" || typeof ver.by !== "string" || !ver.by.trim() || typeof ver.at !== "string" || !ver.at.trim() || Number.isNaN(Date.parse(ver.at))) {
+        diagnostics.push({ severity: "error", code: "invalid-verified-metadata", path: rel, message: "Verified metadata requires non-empty 'by' and valid ISO date 'at'" });
+      }
+    }
+    if (parsed.data.code_refs !== void 0) {
+      if (!Array.isArray(parsed.data.code_refs) || parsed.data.code_refs.some((r) => typeof r !== "string" || !r.trim())) {
+        diagnostics.push({ severity: "error", code: "invalid-code-refs", path: rel, message: "code_refs must be an array of non-empty string glob patterns" });
+      }
+    }
+    if (parsed.data.governance !== void 0) {
+      if (typeof parsed.data.governance !== "string" || !["hold", "active", "deprecated"].includes(parsed.data.governance)) {
+        diagnostics.push({ severity: "error", code: "invalid-governance", path: rel, message: `Invalid governance value: '${String(parsed.data.governance)}'. Must be 'hold', 'active', or 'deprecated'` });
+      }
+    }
+    if (options?.drift && typeof parsed.data.description === "string") {
+      const desc = parsed.data.description.trim();
+      if (desc.length < 10) {
+        diagnostics.push({ severity: "warning", code: "description-drift", path: rel, message: "Description is too short (< 10 characters)" });
+      } else if (/^(TODO|TBD|Placeholder|Draft|None)$/i.test(desc)) {
+        diagnostics.push({ severity: "warning", code: "description-drift", path: rel, message: "Description contains a generic placeholder" });
+      } else if (parsed.body.length > 100) {
+        const descTokens = tokenize(desc);
+        const bodyTokens = new Set(tokenize(parsed.body));
+        const matchedTokens = descTokens.filter((t) => bodyTokens.has(t));
+        if (descTokens.length >= 3 && matchedTokens.length === 0) {
+          diagnostics.push({ severity: "warning", code: "description-drift", path: rel, message: "Description drifted: no matching keywords found in document content" });
+        }
+      }
     }
     if (name === "Flow.md" && (rel.startsWith(".memory/architecture/") || rel.startsWith("architecture/"))) {
       if (byteLength > WARN_DOCUMENT_BYTES) {
@@ -9633,18 +9858,61 @@ async function validateBundle(projectRoot) {
       sourceCount++;
       if (typeof parsed.data.resource !== "string" || typeof parsed.data.source_hash !== "string") diagnostics.push({ severity: "error", code: "source-fields", path: rel, message: "Source requires resource and source_hash" });
       if (typeof parsed.data.integration_status !== "string" || !SOURCE_STATUSES.has(parsed.data.integration_status)) diagnostics.push({ severity: "error", code: "source-status", path: rel, message: `Invalid source integration_status: ${String(parsed.data.integration_status)}` });
-      if (parsed.data.integration_status === "changed" || parsed.data.integration_status === "stale") diagnostics.push({ severity: "warning", code: "stale-source", path: rel, message: `Source needs integration (${parsed.data.integration_status})` });
+      if (parsed.data.integration_status === "changed" || parsed.data.integration_status === "stale") diagnostics.push({ severity: options?.strict ? "error" : "warning", code: "stale-source", path: rel, message: `Source needs integration (${parsed.data.integration_status})` });
       if (parsed.data.integration_status === "integrated") {
         if (typeof parsed.data.integrated_at !== "string") diagnostics.push({ severity: "warning", code: "integration-time", path: rel, message: "Integrated source should record integrated_at" });
         if (!Array.isArray(parsed.data.affected_documents) || parsed.data.affected_documents.length === 0) diagnostics.push({ severity: "warning", code: "source-impact", path: rel, message: "Integrated source should list affected_documents" });
       }
     }
+    const docLinks = /* @__PURE__ */ new Set();
     const links = content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g);
     for (const link of links) {
       const target = resolveMemoryLink(memoryRoot, path, link[1].trim());
       if (!target) continue;
       if (target === "__escape__") diagnostics.push({ severity: "error", code: "link-escape", path: rel, message: `Link escapes bundle: ${link[1]}` });
-      else if (!await exists(target) && !await exists(join2(target, "index.md")) && !await exists(join2(target, "agents.md"))) diagnostics.push({ severity: "warning", code: "broken-link", path: rel, message: `Broken link: ${link[1]}` });
+      else if (!await exists(target) && !await exists(join2(target, "index.md")) && !await exists(join2(target, "agents.md"))) diagnostics.push({ severity: options?.strict ? "error" : "warning", code: "broken-link", path: rel, message: `Broken link: ${link[1]}` });
+      else docLinks.add(target);
+    }
+    fileGraph.set(path, docLinks);
+  }
+  const reachable = /* @__PURE__ */ new Set();
+  const queue = [];
+  if (await exists(rootIndexPath)) {
+    reachable.add(rootIndexPath);
+    queue.push(rootIndexPath);
+  }
+  if (await exists(archIndexPath)) {
+    reachable.add(archIndexPath);
+    queue.push(archIndexPath);
+  }
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const targets = fileGraph.get(current);
+    if (targets) {
+      for (const t of targets) {
+        let resolved = t;
+        if (await exists(join2(t, "index.md"))) resolved = join2(t, "index.md");
+        else if (await exists(join2(t, "agents.md"))) resolved = join2(t, "agents.md");
+        if (!reachable.has(resolved)) {
+          reachable.add(resolved);
+          queue.push(resolved);
+        }
+      }
+    }
+  }
+  for (const filePath of walk.files) {
+    const fileName = basename2(filePath);
+    if (fileName === "log.md" || isPathInside(join2(memoryRoot, "sources"), filePath) || ROOT_CORE_FILES.includes(fileName)) {
+      continue;
+    }
+    if (!reachable.has(filePath)) {
+      const relDoc = normalizeSlash(relative2(root, filePath));
+      diagnostics.push({
+        severity: options?.strict ? "error" : "warning",
+        code: "orphan-document",
+        path: relDoc,
+        message: `Document is orphaned: not linked or reachable from root index.md (${relDoc})`
+      });
     }
   }
   if (declaredActiveScope) {
@@ -10228,6 +10496,194 @@ async function generateMemoryMap(projectRoot) {
   const deepScan = await deepScanRepository(root, scan);
   return generateTreemapContent(scan, deepScan);
 }
+function matchesGlobPattern(pattern, targetPath) {
+  const normPattern = normalizeSlash(pattern).replace(/^\.?\//, "");
+  const normTarget = normalizeSlash(targetPath).replace(/^\.?\//, "");
+  if (normPattern === normTarget) return true;
+  if (normTarget.startsWith(normPattern.endsWith("/") ? normPattern : `${normPattern}/`)) {
+    return true;
+  }
+  const escaped = normPattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "___GLOBSTAR___").replace(/\*/g, "[^/]*").replace(/___GLOBSTAR___/g, ".*");
+  return new RegExp(`^${escaped}$`).test(normTarget);
+}
+async function checkPathGovernance(projectRoot, targetPath) {
+  const root = resolve2(projectRoot);
+  const memoryRoot = bundlePath(root);
+  const relTarget = normalizeSlash(relative2(root, resolve2(root, targetPath))).replace(/^\.?\//, "");
+  const walk = await walkMemory(memoryRoot);
+  const governingDocuments = [];
+  const holds = [];
+  const constraints = [];
+  for (const filePath of walk.files) {
+    const relFile = normalizeSlash(relative2(root, filePath));
+    const content = await readFile2(filePath, "utf8");
+    const parsed = parseMarkdown(content);
+    const data = parsed.data;
+    let isGoverning = false;
+    const codeRefs = Array.isArray(data.code_refs) ? data.code_refs.filter((r) => typeof r === "string") : [];
+    for (const ref of codeRefs) {
+      if (matchesGlobPattern(ref, relTarget)) {
+        isGoverning = true;
+        break;
+      }
+    }
+    if (!isGoverning && Array.isArray(data.repo_paths)) {
+      for (const repoPath of data.repo_paths) {
+        if (typeof repoPath === "string" && matchesGlobPattern(repoPath, relTarget)) {
+          isGoverning = true;
+          break;
+        }
+      }
+    }
+    if (!isGoverning && basename2(filePath) === "agents.md" && dirname2(filePath) !== memoryRoot) {
+      const scope = scopeFromMemoryDirectory(memoryRoot, dirname2(filePath));
+      if (relTarget === scope || relTarget.startsWith(`${scope}/`)) {
+        isGoverning = true;
+      }
+    }
+    if (isGoverning) {
+      const docType = typeof data.type === "string" ? data.type : basename2(filePath) === "agents.md" ? "Agents" : "Document";
+      const title = typeof data.title === "string" ? data.title : basename2(filePath);
+      const governance = typeof data.governance === "string" ? data.governance : void 0;
+      const governanceReason = typeof data.governance_reason === "string" ? data.governance_reason : void 0;
+      governingDocuments.push({
+        path: relFile,
+        type: docType,
+        title,
+        codeRefs: codeRefs.length > 0 ? codeRefs : void 0,
+        governance,
+        governanceReason
+      });
+      if (governance === "hold") {
+        holds.push({ path: relFile, reason: governanceReason });
+      }
+      const constraintLines = content.split("\n").filter((line) => {
+        const trimmed = line.trim();
+        return /^-?\s*(MUST|MUST NOT|NEVER|INVARIANT|Constraint):/i.test(trimmed) || /^- \*\*Invariant\*\*/i.test(trimmed) || /^- \*\*Constraint\*\*/i.test(trimmed);
+      });
+      for (const line of constraintLines) {
+        const clean = line.replace(/^[-*]\s+/, "").trim();
+        if (!constraints.includes(clean)) constraints.push(clean);
+      }
+    }
+  }
+  let overallGovernance = "untracked";
+  if (holds.length > 0) {
+    overallGovernance = "hold";
+  } else if (governingDocuments.length > 0) {
+    const hasActive = governingDocuments.some((d) => d.governance === "active" || !d.governance);
+    const allDeprecated = governingDocuments.every((d) => d.governance === "deprecated");
+    overallGovernance = allDeprecated ? "deprecated" : hasActive ? "active" : "active";
+  }
+  return {
+    targetPath: relTarget,
+    governance: overallGovernance,
+    holds,
+    governingDocuments,
+    constraints
+  };
+}
+async function searchMemory(projectRoot, query, options) {
+  const root = resolve2(projectRoot);
+  const memoryRoot = bundlePath(root);
+  const queryTokens = tokenize(query);
+  if (queryTokens.length === 0) return [];
+  const walk = await walkMemory(memoryRoot);
+  const limit = options?.limit ?? 10;
+  const targetScopeDir = options?.scope ? scopeDirectory(root, options.scope) : void 0;
+  const docIndices = [];
+  for (const filePath of walk.files) {
+    if (targetScopeDir && !isPathInside(targetScopeDir, filePath)) continue;
+    const content = await readFile2(filePath, "utf8");
+    const parsed = parseMarkdown(content);
+    const data = parsed.data;
+    const title = typeof data.title === "string" ? data.title : basename2(filePath);
+    const type = typeof data.type === "string" ? data.type : "Document";
+    const description = typeof data.description === "string" ? data.description : "";
+    const tags = Array.isArray(data.tags) ? data.tags.filter((t) => typeof t === "string") : [];
+    const titleTokens = tokenize(title);
+    const descTokens = tokenize(description);
+    const tagsTokens = tags.flatMap((t) => tokenize(t));
+    const bodyTokens = tokenize(parsed.body);
+    const tokenCounts = /* @__PURE__ */ new Map();
+    for (const t of titleTokens) tokenCounts.set(t, (tokenCounts.get(t) ?? 0) + 3);
+    for (const t of descTokens) tokenCounts.set(t, (tokenCounts.get(t) ?? 0) + 2);
+    for (const t of tagsTokens) tokenCounts.set(t, (tokenCounts.get(t) ?? 0) + 2);
+    for (const t of bodyTokens) tokenCounts.set(t, (tokenCounts.get(t) ?? 0) + 1);
+    const dl = titleTokens.length + descTokens.length + tagsTokens.length + bodyTokens.length;
+    docIndices.push({
+      path: filePath,
+      relPath: normalizeSlash(relative2(root, filePath)),
+      title,
+      type,
+      description,
+      tags,
+      content,
+      body: parsed.body,
+      tokenCounts,
+      dl
+    });
+  }
+  if (docIndices.length === 0) return [];
+  const N = docIndices.length;
+  const avgdl = docIndices.reduce((acc, d) => acc + d.dl, 0) / N;
+  const k1 = 1.2;
+  const b = 0.75;
+  const idf = /* @__PURE__ */ new Map();
+  for (const q of queryTokens) {
+    const df = docIndices.filter((d) => (d.tokenCounts.get(q) ?? 0) > 0).length;
+    idf.set(q, Math.log(1 + (N - df + 0.5) / (df + 0.5)));
+  }
+  const results = [];
+  for (const doc of docIndices) {
+    let score = 0;
+    let primaryMatchToken;
+    for (const q of queryTokens) {
+      const tf = doc.tokenCounts.get(q) ?? 0;
+      if (tf > 0) {
+        if (!primaryMatchToken) primaryMatchToken = q;
+        const qIdf = idf.get(q) ?? 0;
+        const termScore = qIdf * (tf * (k1 + 1) / (tf + k1 * (1 - b + b * (doc.dl / (avgdl || 1)))));
+        score += termScore;
+      }
+    }
+    if (score > 0) {
+      let matchedField = "body";
+      if (primaryMatchToken && tokenize(doc.title).includes(primaryMatchToken)) {
+        matchedField = "title";
+      } else if (primaryMatchToken && tokenize(doc.description).includes(primaryMatchToken)) {
+        matchedField = "description";
+      } else if (primaryMatchToken && doc.tags.some((tag) => tokenize(tag).includes(primaryMatchToken))) {
+        matchedField = "tags";
+      }
+      let snippet = "";
+      if (primaryMatchToken) {
+        const regex = new RegExp(`\\b(${primaryMatchToken})\\b`, "i");
+        const match = doc.content.match(regex);
+        if (match && match.index !== void 0) {
+          const start = Math.max(0, match.index - 75);
+          const end = Math.min(doc.content.length, match.index + 125);
+          const raw = doc.content.slice(start, end).replace(/\r?\n/g, " ").trim();
+          snippet = `${start > 0 ? "... " : ""}${raw}${end < doc.content.length ? " ..." : ""}`;
+        }
+      }
+      if (!snippet) {
+        snippet = doc.description || doc.body.slice(0, 150).replace(/\r?\n/g, " ").trim();
+      }
+      results.push({
+        path: doc.path,
+        relPath: doc.relPath,
+        title: doc.title,
+        type: doc.type,
+        score,
+        matchedField,
+        snippet
+      });
+    }
+  }
+  results.sort((a, b2) => b2.score - a.score);
+  return results.slice(0, limit);
+}
 
 // src/cli.ts
 var HELP = `Project Memory CLI
@@ -10242,6 +10698,8 @@ Usage:
   migrate              Safely upgrade legacy Project Memory bundles to 0.2
   sync                 Detect changed sources and refresh generated indexes
   status               Show goal, source freshness, blockers, and next action
+  search               Lexical BM25 search across all .memory documents
+  check                Inspect governance holds, constraints, and scope for a code path
   context              Emit the exact context agents should receive
   map                  Generate on-demand codebase treemap & architecture layout
   record               Register a source and/or append a history event
@@ -10252,6 +10710,11 @@ Usage:
 Common options:
   --root <path>         Project root (default: current directory/Git root)
   --scope <path>        Tracked scope; repeat for multiple scopes
+  --for-path <path>     Target repository file path for check command
+  --query <text>        Search query keywords (optional; positional query supported)
+  --limit <number>      Maximum search results to return (default: 10)
+  --drift               Check description and semantic drift during validate
+  --strict              Elevate broken links and orphans to errors during validate
   --budget <bytes>      Byte budget for context command (default: 6000)
   --deep                Perform deep codebase ingestion scan during init (default)
   --shallow             Perform skeleton init without deep codebase scan
@@ -10278,6 +10741,11 @@ function parseArguments(argv) {
     options: {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
+      "for-path": { type: "string" },
+      query: { type: "string" },
+      limit: { type: "string" },
+      drift: { type: "boolean" },
+      strict: { type: "boolean" },
       budget: { type: "string" },
       deep: { type: "boolean" },
       source: { type: "string", multiple: true },
@@ -10304,8 +10772,36 @@ var flags = (args, name) => Array.isArray(args.flags[name]) ? args.flags[name] :
 var enabled = (args, name) => args.flags[name] === true;
 function formatToon(value) {
   if (value === null || value === void 0) return "";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "results:none";
+    if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
+      const items = value;
+      const lines = items.map((item) => `  ${item.score.toFixed(2)}|${item.relPath}|${item.title}|${item.snippet.replace(/\n/g, " ")}`);
+      return `search_results[score|path|title|snippet]:
+${lines.join("\n")}`;
+    }
+  }
   if (typeof value !== "object") return String(value);
   const object = value;
+  if ("targetPath" in object && "governance" in object && "governingDocuments" in object) {
+    const res = object;
+    const lines = [
+      `path:${res.targetPath}|governance:${res.governance}|holds:${res.holds.length}|docs:${res.governingDocuments.length}`
+    ];
+    if (res.holds.length > 0) {
+      lines.push("holds[path|reason]:");
+      for (const h of res.holds) lines.push(`  ${h.path}|${h.reason ?? "none"}`);
+    }
+    if (res.governingDocuments.length > 0) {
+      lines.push("docs[path|type|governance]:");
+      for (const d of res.governingDocuments) lines.push(`  ${d.path}|${d.type}|${d.governance ?? "active"}`);
+    }
+    if (res.constraints.length > 0) {
+      lines.push("constraints:");
+      for (const c of res.constraints) lines.push(`  - ${c}`);
+    }
+    return lines.join("\n");
+  }
   if ("diagnostics" in object && "counts" in object) {
     const counts = object.counts;
     const diagnostics = object.diagnostics ?? [];
@@ -10355,8 +10851,43 @@ ${object.treemap}`;
   return Object.entries(object).map(([k, v]) => v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`).join(" | ");
 }
 function summarize(value) {
-  if (!value || typeof value !== "object") return String(value);
+  if (value === null || value === void 0) return "";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "No results found.";
+    if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
+      const items = value;
+      const lines = [`Found ${items.length} matching document(s):`];
+      for (const item of items) {
+        lines.push(`- [${item.score.toFixed(2)}] ${item.relPath} (${item.title}) [${item.matchedField}]`);
+        lines.push(`  Snippet: ${item.snippet.replace(/\s+/g, " ").trim()}`);
+      }
+      return lines.join("\n");
+    }
+  }
+  if (typeof value !== "object") return String(value);
   const object = value;
+  if ("targetPath" in object && "governance" in object && "governingDocuments" in object) {
+    const res = object;
+    const lines = [
+      `Path: ${res.targetPath}`,
+      `Governance: ${res.governance.toUpperCase()}`
+    ];
+    if (res.holds.length > 0) {
+      lines.push(`\u26A0\uFE0F ACTIVE HOLDS (${res.holds.length}):`);
+      for (const h of res.holds) lines.push(`- ${h.path}: ${h.reason ?? "Subsystem frozen by governance"}`);
+    }
+    if (res.governingDocuments.length > 0) {
+      lines.push(`Governing Documents (${res.governingDocuments.length}):`);
+      for (const doc of res.governingDocuments) {
+        lines.push(`- ${doc.path} (${doc.type}) [${doc.governance ?? "active"}]`);
+      }
+    }
+    if (res.constraints.length > 0) {
+      lines.push(`Constraints & Invariants (${res.constraints.length}):`);
+      for (const c of res.constraints) lines.push(`- ${c}`);
+    }
+    return lines.join("\n");
+  }
   if ("diagnostics" in object && "counts" in object) {
     const counts = object.counts;
     const diagnostics = object.diagnostics;
@@ -10520,8 +11051,25 @@ async function runCli(argv, io = {
         result = dryRun ? await mutate() : await withBundleLock(root, mutate);
         break;
       }
+      case "search": {
+        const query = [flag(args, "query"), ...args.positional].filter(Boolean).join(" ");
+        if (!query.trim()) throw new Error("search requires a query string");
+        const limitStr = flag(args, "limit");
+        const limit = limitStr ? parseInt(limitStr, 10) : 10;
+        const scope = flag(args, "scope");
+        result = await searchMemory(root, query, { limit, scope });
+        break;
+      }
+      case "check": {
+        const targetPath = flag(args, "for-path") ?? args.positional[0];
+        if (!targetPath) throw new Error("check requires --for-path <path> or positional path");
+        result = await checkPathGovernance(root, targetPath);
+        break;
+      }
       case "validate": {
-        result = await validateBundle(root);
+        const drift = enabled(args, "drift");
+        const strict = enabled(args, "strict");
+        result = await validateBundle(root, { drift, strict });
         break;
       }
       case "agents-sync": {

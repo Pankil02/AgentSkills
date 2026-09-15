@@ -94,10 +94,12 @@ node skills/memory/scripts/memory.mjs --help
 | `memory migrate` | Upgrades legacy 0.1 bundle to 0.2 architecture lenses | Upgrade existing project memory |
 | `memory scaffold --scope path` | Adds an approved tracked scope | Add a feature area |
 | `memory status [--scope path]` | Shows lifecycle, blockers, source state, and next action | Resume work |
+| `memory search <query>` | In-memory BM25 lexical search returning ranked snippets | Retrieve specific concepts or decisions |
+| `memory check --for-path <path>` | Discovers active holds, constraints, and scope for a code path | Pre-edit governance check before code changes |
 | `memory record --source repo://path` | Registers an approved local source | Add requirements or evidence |
 | `memory record --source https://...` | Fetches and fingerprints an approved public URL | Add an external source |
 | `memory sync [--fetch-remote]` | Refreshes fingerprints, indexes, and `AGENTS.md` | After repository or source changes |
-| `memory validate` | Checks paths, links, YAML, markers, scopes, and lifecycle | After memory updates or in CI |
+| `memory validate [--drift] [--strict]` | Checks paths, links, YAML, markers, reachability & drift | After memory updates or in CI |
 | `memory apply --plan-file plan.json` | Applies validated, atomic structured changes | Agent or automation writes |
 | `memory agents-sync` | Adds or repairs the managed `AGENTS.md` block | Restore agent instructions |
 
