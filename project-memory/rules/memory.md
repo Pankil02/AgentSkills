@@ -2,8 +2,13 @@
 
 When `.memory/index.md` exists in a workspace:
 
-1. **Read Index & Route Architecture**: Read `.memory/index.md` (< 4 KB router), route through System Flow (`.memory/architecture/system-design/Flow.md`) → relevant layer `Flow.md` → matching scope's `agents.md` (or root `goal.md` and `progress.md`). Subfolders contain strictly `agents.md` and `log.md`; `goal.md`, `progress.md`, and `tasks.md` exist strictly in root. Keep `index.md`, relevant `Flow.md`, and `AGENTS.md` updated.
-2. **Mandatory DDD Task Gate**: Before implementing features or tasks, declare and enforce domain bounded context, ubiquitous language terms, and business invariants in domain logic.
+1. **Selective On-Demand Retrieval**: Read `.memory/index.md` (< 4 KB master router). **NEVER load or read all `.memory/` files in bulk.** Read ONLY the single file needed for your immediate task:
+   - Next task: Read `.memory/tasks.md` (or scope `agents.md`). Cap active tasks ≤ 5.
+   - Code editing: Run `memory check --for-path <file>` first. Read ONLY the returned governing document. If on hold, STOP.
+   - Domain invariants: Read `.memory/architecture/domain/Flow.md` (mandatory DDD gate).
+   - Verification evidence: Read `.memory/progress.md`.
+   - Keyword retrieval: Run `memory search <keywords>` for ranked BM25 snippets without loading entire documents.
+2. **Mandatory DDD Task Gate**: Before implementing features, enforce domain bounded contexts, ubiquitous language, and business invariants in domain logic.
 3. **Strict Requirements**: Treat approved wants, must-not rules, non-goals, and acceptance criteria as binding requirements.
 4. **Ask, Don't Guess**: Clarify ambiguous, stale, or contradictory intent with user. Never guess.
 5. **Lead with Next Action**: Put single concrete next action (exact file path or command) first in status updates, `progress.md`, `tasks.md`, and scope `agents.md`.

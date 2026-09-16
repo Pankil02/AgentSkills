@@ -62,7 +62,7 @@ timestamp: 2026-05-28T14:30:00Z
 ---
 ```
 
-The root `index.md` is an executive memory capsule and the only index with frontmatter (`memory_version: "0.2"`, `architecture_mode: "ddd"`, `architecture_index: "/architecture/"`, `system_flow: "/architecture/system-design/Flow.md"`). It contains `## Project` (1-line facts), `## Now` (active objective, scope, state, next action, blocker), `## Architecture` (direct links to mandatory flows & index), `## Find` (quick lookup table), and `## Active scopes` (bounded list of up to 5 scopes). Codebase treemaps are generated on demand via `memory map` rather than inflated in the root index.
+The root `index.md` is an executive memory capsule and the only index with frontmatter (`memory_version: "0.2"`, `architecture_mode: "ddd"`, `architecture_index: "/architecture/"`, `system_flow: "/architecture/system-design/Flow.md"`). It contains the **Token-Efficiency Directive**, `## Project` (1-line facts), `## Now` (active objective, scope, state, next action, blocker), `## Architecture` (direct links to mandatory flows & index), `## Structure & File Tree` (visual ASCII directory layout with file responsibilities), `## Find` (quick lookup table mapping tasks to exact paths & commands), and `## Active scopes` (bounded list of up to 5 scopes). Codebase treemaps are generated on demand via `memory map` rather than inflated in the root index. All agents must load only the single document needed on demand.
 
 ## Identity, requirement IDs, and links
 

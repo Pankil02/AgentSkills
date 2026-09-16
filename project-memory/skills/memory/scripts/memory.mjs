@@ -7682,6 +7682,8 @@ function rootIndexTemplate(projectName, timestamp2, head, deepScan, fingerprint,
     last_scan_at: timestamp2
   }, `# Project Memory
 
+> **TOKEN EFFICIENCY**: DO NOT load all memory files. Read ONLY the single path needed for your task.
+
 ## Project
 - Purpose: ${projectName} project.
 - Stack: ${stack}
@@ -7705,16 +7707,34 @@ function rootIndexTemplate(projectName, timestamp2, head, deepScan, fingerprint,
 - Route: ${activeRoute}
 - Full map: [Architecture index](/architecture/)
 
+## Structure & File Tree
+\`\`\`text
+.memory/
+\u251C\u2500\u2500 index.md             # Router (< 4 KB)
+\u251C\u2500\u2500 goal.md              # Requirements & AC
+\u251C\u2500\u2500 progress.md          # Evidence & status
+\u251C\u2500\u2500 tasks.md             # Next action (\u22645)
+\u251C\u2500\u2500 log.md               # History
+\u251C\u2500\u2500 architecture/        # Dynamic flow contracts
+\u2502   \u251C\u2500\u2500 index.md         # Layer registry
+\u2502   \u251C\u2500\u2500 system-design/   # Topology & entry
+\u2502   \u251C\u2500\u2500 domain/          # DDD invariants
+\u2502   \u2514\u2500\u2500 security/        # Trust & auth
+\u251C\u2500\u2500 sources/             # Sources & briefs
+\u2514\u2500\u2500 <scope>/             # Scope agents.md & log.md
+\`\`\`
+
 ## Find
-| Need | Read |
+| Need | Read / Command |
 |---|---|
-| Approved intent | goal.md |
-| Current work/evidence | progress.md |
-| Next actions | tasks.md |
-| Code/data route | architecture/.../Flow.md |
-| Decisions/history | log.md |
-| Provenance | sources/ |
-| Full repository tree | \`memory map\` |
+| Next action | [.memory/tasks.md](/tasks.md) |
+| Requirements | [.memory/goal.md](/goal.md) |
+| Verification | [.memory/progress.md](/progress.md) |
+| Domain logic | [.memory/architecture/domain/Flow.md](/architecture/domain/Flow.md) |
+| Code check | \`memory check --for-path <file>\` |
+| Search | \`memory search <keywords>\` |
+| History | [.memory/log.md](/log.md) |
+| Full map | \`memory map\` |
 
 ## Active scopes
 <!-- memory:generated:start scopes -->
@@ -9346,10 +9366,15 @@ async function exists(path) {
   }
 }
 function formatMemoryContext(indexContent) {
-  return `[PROJECT MEMORY]
-Persistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient.
-Read this index first. Route through System Flow \u2192 relevant layer Flow \u2192 scope goal/progress. Apply the DDD gate before implementation.
-Ask rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources, architecture flows) is loaded on demand.
+  return `[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)
+Persistent project truth is in .memory/. DO NOT load all memory files into context!
+Load ONLY the single relevant document required for your specific task:
+\u2022 Need next action: Read .memory/tasks.md (or active scope's agents.md).
+\u2022 Editing code: Run \`memory check --for-path <file>\` to discover the exact governing Flow/agents.md.
+\u2022 Domain logic: Read .memory/architecture/domain/Flow.md (enforce DDD business invariants).
+\u2022 Verify work: Read .memory/progress.md.
+\u2022 Search memory: Run \`memory search <keywords>\` for targeted snippets instead of reading entire files.
+Ask rather than guess; semantic changes require explicit user approval. Detailed memory is loaded strictly on demand.
 
 ACTIVE INDEX
 ${indexContent}`;

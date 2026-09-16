@@ -118,13 +118,6 @@ export interface ValidationResult {
   };
 }
 
-export type TrustTier = "generated" | "verified" | "human_authored";
-
-export interface ProvenanceActor {
-  by: string;
-  at: string;
-}
-
 export type GovernanceStatus = "hold" | "active" | "deprecated" | "untracked";
 
 export interface PathGovernanceResult {
@@ -462,6 +455,8 @@ function rootIndexTemplate(
     last_scan_at: timestamp,
   }, `# Project Memory
 
+> **TOKEN EFFICIENCY**: DO NOT load all memory files. Read ONLY the single path needed for your task.
+
 ## Project
 - Purpose: ${projectName} project.
 - Stack: ${stack}
@@ -485,16 +480,34 @@ function rootIndexTemplate(
 - Route: ${activeRoute}
 - Full map: [Architecture index](/architecture/)
 
+## Structure & File Tree
+\`\`\`text
+.memory/
+├── index.md             # Router (< 4 KB)
+├── goal.md              # Requirements & AC
+├── progress.md          # Evidence & status
+├── tasks.md             # Next action (≤5)
+├── log.md               # History
+├── architecture/        # Dynamic flow contracts
+│   ├── index.md         # Layer registry
+│   ├── system-design/   # Topology & entry
+│   ├── domain/          # DDD invariants
+│   └── security/        # Trust & auth
+├── sources/             # Sources & briefs
+└── <scope>/             # Scope agents.md & log.md
+\`\`\`
+
 ## Find
-| Need | Read |
+| Need | Read / Command |
 |---|---|
-| Approved intent | goal.md |
-| Current work/evidence | progress.md |
-| Next actions | tasks.md |
-| Code/data route | architecture/.../Flow.md |
-| Decisions/history | log.md |
-| Provenance | sources/ |
-| Full repository tree | \`memory map\` |
+| Next action | [.memory/tasks.md](/tasks.md) |
+| Requirements | [.memory/goal.md](/goal.md) |
+| Verification | [.memory/progress.md](/progress.md) |
+| Domain logic | [.memory/architecture/domain/Flow.md](/architecture/domain/Flow.md) |
+| Code check | \`memory check --for-path <file>\` |
+| Search | \`memory search <keywords>\` |
+| History | [.memory/log.md](/log.md) |
+| Full map | \`memory map\` |
 
 ## Active scopes
 <!-- memory:generated:start scopes -->
@@ -2084,7 +2097,7 @@ export interface BuildMemoryContextOptions {
 }
 
 function formatMemoryContext(indexContent: string): string {
-  return `[PROJECT MEMORY]\nPersistent project truth is in .memory. Keep all .memory/ documents ultra-short, compact, concise, and token-efficient.\nRead this index first. Route through System Flow → relevant layer Flow → scope goal/progress. Apply the DDD gate before implementation.\nAsk rather than guess; semantic changes require explicit approval. Use memory_ask for clarification, memory_apply or memory CLI for validated updates. Detailed memory (goals, progress, tasks, logs, sources, architecture flows) is loaded on demand.\n\nACTIVE INDEX\n${indexContent}`;
+  return `[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)\nPersistent project truth is in .memory/. DO NOT load all memory files into context!\nLoad ONLY the single relevant document required for your specific task:\n• Need next action: Read .memory/tasks.md (or active scope's agents.md).\n• Editing code: Run \`memory check --for-path <file>\` to discover the exact governing Flow/agents.md.\n• Domain logic: Read .memory/architecture/domain/Flow.md (enforce DDD business invariants).\n• Verify work: Read .memory/progress.md.\n• Search memory: Run \`memory search <keywords>\` for targeted snippets instead of reading entire files.\nAsk rather than guess; semantic changes require explicit user approval. Detailed memory is loaded strictly on demand.\n\nACTIVE INDEX\n${indexContent}`;
 }
 
 function formatMemoryBudgetError(path: string, byteLength: number, budget: number): string {

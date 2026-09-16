@@ -59,6 +59,57 @@ Generates the complete codebase treemap with architectural annotations on demand
 }
 ```
 
+## `check`
+
+Inspects code-to-memory path governance, active subsystem holds, and constraints for a target file. Agents use this to discover the single governing document to read before editing code.
+
+```json
+{
+  "targetPath": "src/auth/token.ts",
+  "governance": "active | hold | deprecated | untracked",
+  "holds": [{ "path": ".memory/architecture/auth/Flow.md", "reason": "Optional hold reason" }],
+  "governingDocuments": [
+    {
+      "path": ".memory/architecture/auth/Flow.md",
+      "type": "Flow",
+      "title": "Auth Flow",
+      "governance": "active"
+    }
+  ],
+  "constraints": ["MUST NOT log raw tokens"]
+}
+```
+
+## `search`
+
+In-memory BM25 lexical search across all `.memory/` documents. Returns ranked document snippets so agents can answer specific queries without loading entire files.
+
+```json
+[
+  {
+    "path": "/absolute/project/.memory/architecture/domain/Flow.md",
+    "relPath": ".memory/architecture/domain/Flow.md",
+    "title": "Domain Flow",
+    "type": "Flow",
+    "score": 4.12,
+    "matchedField": "body",
+    "snippet": "...business invariants require strict validation..."
+  }
+]
+```
+
+## `context`
+
+Emits the exact token-optimized context injected into AI agents at session startup (< 6,000 bytes). Flags: `--scope <path>`, `--budget <bytes>`, `--toon`.
+
+```json
+{
+  "context": "[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)...",
+  "scope": ".",
+  "budget": 6000
+}
+```
+
 ## `status`
 
 ```json

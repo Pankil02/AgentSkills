@@ -1,7 +1,7 @@
 ---
 name: project-memory
 description: Maintains a persistent linked Markdown project wiki for goals, detailed requirements, decisions, sources, progress, evidence, corrections, and handoffs. Use when starting or resuming project work, clarifying intent, interviewing for a feature, integrating a source, checking status or drift, recording decisions, validating evidence, or completing a goal.
-version: 1.2.0
+version: 1.4.0
 author: Pankil
 license: MIT
 tags:
@@ -10,30 +10,70 @@ tags:
   - context
   - adhd-optimized
   - documentation
+  - token-optimized
 ---
 
 # Project Memory
 
-Durable project wiki in `.memory/`. Linked, human-readable Markdown brain for LLM context, managed deterministically via `memory` CLI.
+Durable project wiki in `.memory/`. Linked, human-readable Markdown brain for LLM context, managed deterministically via `memory` CLI with in-memory BM25 lexical search and code-to-memory path governance.
+
+## ⚡ Token-Optimization & Selective Loading Protocol
+
+**CRITICAL AGENT DIRECTIVE: NEVER load or read all `.memory/` files into context at once.**
+Ingesting `.memory/**` or multiple memory files simultaneously wastes tokens and causes context overflow. Practice strict **Progressive Disclosure**:
+
+1. **Only `.memory/index.md` is loaded at startup** (< 4 KB budget). It serves as your master router and file tree map.
+2. **On-Demand Single-File Retrieval**:
+   - **Need next task?** Read ONLY `.memory/tasks.md` (or active scope's `agents.md`). Do NOT load `goal.md` or `log.md`.
+   - **Editing a code file?** Run `memory check --for-path <file>`. Read ONLY the single governing Flow or `agents.md` reported.
+   - **Need business/domain rules?** Read ONLY `.memory/architecture/domain/Flow.md` (DDD invariants).
+   - **Verifying completed work?** Read ONLY `.memory/progress.md` (evidence table).
+   - **Searching memory?** Run `memory search <keywords>` to get BM25 ranked snippets without loading whole documents.
+   - **Need codebase layout?** Run `memory map` on demand instead of expanding files in memory.
+3. **Keep All Memory Files Ultra-Compact**: Telegraphic Markdown, zero conversational fluff, strictly enforce active tasks ≤ 5.
+
+## 📁 Memory Directory & File Tree
+
+```text
+.memory/
+├── index.md             # Master router & tree (< 4 KB) — READ FIRST
+├── goal.md              # Approved requirements, non-goals & AC criteria
+├── progress.md          # Verification evidence table & drift tracking
+├── tasks.md             # Immediate next action & active tasks (max 5)
+├── log.md               # Append-only milestone history & immutable decisions
+├── architecture/        # Dynamic architecture lenses & DDD contracts
+│   ├── index.md         # Layer registry & routing table
+│   ├── system-design/   # Flow.md: Entry points, service topology & data flow
+│   ├── domain/          # Flow.md: Bounded contexts, entities & invariants
+│   └── security/        # Flow.md: Trust boundaries, auth & permissions
+├── sources/             # index.md & approved source records / briefs
+└── <scope>/             # Tracked subfolder scopes (e.g. apps/api)
+    ├── agents.md        # Scope architecture, goal, progress & tasks
+    └── log.md           # Scope append-only milestone history
+```
 
 ## Quick Commands
 
+- **Check Path**: `memory check --for-path <path>` (pre-edit check for governing docs, holds & constraints)
+- **Search**: `memory search <query>` (in-memory BM25 lexical retrieval returning ranked snippets)
+- **Status**: `memory status --toon` (compact token-oriented status)
+- **Map**: `memory map` (on-demand codebase treemap)
 - **Init**: `memory init` (or `memory init --deep` for full code scan, `memory init --scope <path>`)
 - **Migrate**: `memory migrate` (upgrades legacy bundles: shifts subfolder goal/progress/tasks into `agents.md`, updates `log.md`, and adds 0.2 architecture lenses — see `references/upgrade.md`)
-- **Status**: `memory status --toon`
-- **Validate**: `memory validate`
+- **Validate**: `memory validate` (or `memory validate --drift --strict` for orphan and description drift detection)
 - **Record Source**: `memory record --source <path|url> --json`
 - **Sync**: `memory sync --json`
 - **Apply Plan**: `memory apply --plan-file <path>`
 
-## Start Every Task (DDD & Architecture Route)
+## Start Every Task (Selective Route)
 
 1. Read `.memory/index.md` executive router (< 4 KB budget).
-2. Follow routing path: System Flow (`.memory/architecture/system-design/Flow.md`) → relevant layer `Flow.md` (`frontend`, `backend`, `domain`, `security`, etc.) → target scope's `agents.md` (or root `goal.md`, `progress.md`, and `tasks.md`).
-3. **Mandatory DDD Gate**: Before implementing any task, check and verify the domain bounded context, ubiquitous language terms, and business invariants in domain logic.
-4. Treat approved wants, must-nots, non-goals, acceptance criteria, and corrections as binding requirements.
-5. Use wiki context before broad repository exploration.
-6. If memory is missing or stale, stop and ask rather than guessing intent.
+2. **Pre-Edit Path Check**: Run `memory check --for-path <file>` before editing code. Read ONLY the governing Flow or scope `agents.md` identified. If `governance: hold`, STOP immediately.
+3. **Search-Before-Write**: Run `memory search <keywords>` before authoring new requirements, decisions, or scope docs to prevent duplication.
+4. **Targeted Layer Check**: If editing core domain logic, inspect `.memory/architecture/domain/Flow.md` to verify bounded contexts and business invariants.
+5. Treat approved wants, must-nots, non-goals, acceptance criteria, and corrections as binding requirements.
+6. Use wiki context before broad repository exploration.
+7. If memory is missing or stale, stop and ask rather than guessing intent.
 
 ## Bundle Structure & Scope Layout
 
