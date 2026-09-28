@@ -2,16 +2,19 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import pc from 'picocolors';
 import { AGENT_REGISTRY, getAgent, resolveAgentDestination } from '../src/agents.js';
 import { discoverSkills } from '../src/discovery.js';
 import { runDoctor, printDoctorReport } from '../src/doctor.js';
 import { executeInstall, runInteractiveWizard, removeSingleSkill } from '../src/installer.js';
+import { executeUpdate } from '../src/updater.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..');
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
 
 const HELP_TEXT = `
 ${pc.bold(pc.cyan('🧠 AgentSkills CLI'))} - Enterprise Installer for AI Coding Agent Skills
@@ -22,6 +25,7 @@ ${pc.bold('USAGE:')}
 
 ${pc.bold('COMMANDS:')}
   ${pc.cyan('install, add')} [skills...]   Install skills (interactive if no flags provided)
+  ${pc.cyan('update, upgrade')} [skills...] Update installed skills in place (keeps backups, never touches project data)
   ${pc.cyan('list, ls')}                 List all available skills in this repository
   ${pc.cyan('doctor, check')}            Run system diagnostics & verify agent environments
   ${pc.cyan('validate')}                 Validate all SKILL.md files against schema
@@ -29,7 +33,7 @@ ${pc.bold('COMMANDS:')}
   ${pc.cyan('help')}                     Show this help documentation
 
 ${pc.bold('OPTIONS:')}
-  ${pc.yellow('--scope')} <project|global> Installation scope (default: project)
+  ${pc.yellow('--scope')} <project|global> Installation scope (default: project; update scans both)
   ${pc.yellow('--target')} <agent>         Target agent (${AGENT_REGISTRY.map(a => a.id).join(', ')}, all)
   ${pc.yellow('-s, --symlink')}            Use symbolic links (auto-updates with git pull)
   ${pc.yellow('--copy')}                   Copy files instead of symlinking
@@ -37,6 +41,7 @@ ${pc.bold('OPTIONS:')}
   ${pc.yellow('--dry-run')}                Simulate installation without writing to disk
   ${pc.yellow('--json')}                   Output results in machine-readable JSON format
   ${pc.yellow('--backup')}                 Create timestamped backup if skill already exists
+  ${pc.yellow('--no-backup')}              (update) Skip backup of replaced copies
 
 ${pc.bold('EXAMPLES:')}
   $ ${pc.dim('# Interactive wizard (recommended):')}
@@ -47,6 +52,10 @@ ${pc.bold('EXAMPLES:')}
 
   $ ${pc.dim('# Install to current project workspace (.agents/skills):')}
   $ npx @pankil/agent-skills install --scope project --symlink -y
+
+  $ ${pc.dim('# Update everything you installed earlier (preview first):')}
+  $ npx github:Pankil02/AgentSkills update --dry-run
+  $ npx github:Pankil02/AgentSkills update
 
   $ ${pc.dim('# Run diagnostics:')}
   $ npx @pankil/agent-skills doctor
@@ -75,7 +84,8 @@ async function main() {
       local: { type: 'boolean' },
       global: { type: 'boolean', short: 'g' },
       all: { type: 'boolean', short: 'a' },
-      force: { type: 'boolean', short: 'f' }
+      force: { type: 'boolean', short: 'f' },
+      'no-backup': { type: 'boolean' }
     }
   });
 
@@ -85,12 +95,13 @@ async function main() {
   }
 
   if (values.version || positionals[0] === 'version') {
-    console.log('1.1.0');
+    console.log(PKG_VERSION);
     return;
   }
 
   const KNOWN_COMMANDS = new Set([
     'install', 'add',
+    'update', 'upgrade',
     'list', 'ls',
     'doctor', 'check',
     'validate',
@@ -161,7 +172,44 @@ async function main() {
     }
   }
 
-  // 4. UNINSTALL COMMAND
+  // 4. UPDATE COMMAND
+  if (command === 'update' || command === 'upgrade') {
+    const requested = positionals.slice(1).flatMap(s => s.split(',')).map(s => s.trim()).filter(Boolean);
+    const scope = values.global ? 'global' : (values.project || values.local ? 'project' : (values.scope || 'all'));
+    const report = executeUpdate({
+      repoRoot: REPO_ROOT,
+      scope,
+      cwd: process.cwd(),
+      skills: requested,
+      dryRun: Boolean(values['dry-run']),
+      backup: !values['no-backup']
+    });
+
+    if (values.json) {
+      console.log(JSON.stringify(report, null, 2));
+      process.exit(report.failed ? 1 : 0);
+    }
+
+    console.log(pc.bold(pc.cyan(`\n⬆️  AgentSkills Update (source v${PKG_VERSION})${report.dryRun ? pc.yellow(' [dry-run]') : ''}\n`)));
+    if (report.results.length === 0) {
+      console.log(pc.dim('  No installed skills found. Run `install` first.\n'));
+      return;
+    }
+    const icons = { 'up-to-date': pc.dim('='), updated: pc.green('↑'), 'would-update': pc.yellow('~'), linked: pc.cyan('↪'), failed: pc.red('✗') };
+    for (const r of report.results) {
+      const versions = r.fromVersion === r.toVersion ? `v${r.toVersion}` : `v${r.fromVersion ?? '?'} → v${r.toVersion}`;
+      console.log(`  ${icons[r.status]} ${pc.bold(r.skill)} ${pc.dim(versions)} ${pc.dim(`[${r.status}]`)} → ${pc.cyan(r.agentName)} (${r.scope})`);
+      console.log(`    ${pc.dim(r.targetPath)}`);
+      if (r.backedUp) console.log(`    ${pc.yellow('Backup:')} ${r.backedUp}`);
+      if (r.note) console.log(`    ${pc.dim(r.note)}`);
+      if (r.error) console.log(`    ${pc.red('Error:')} ${r.error}`);
+    }
+    console.log(pc.bold(`\nUpdated ${report.updated}, pending ${report.pending}, failed ${report.failed}.`));
+    console.log(pc.dim('Migration notes: CHANGELOG.md · project data (.memory/, source code) is never modified.\n'));
+    process.exit(report.failed ? 1 : 0);
+  }
+
+  // 5. UNINSTALL COMMAND
   if (command === 'uninstall' || command === 'remove') {
     const rawRemoveArgs = isKnownCommand ? positionals.slice(1) : positionals;
     const skillsToRemove = rawRemoveArgs
@@ -213,7 +261,7 @@ async function main() {
     return;
   }
 
-  // 5. INSTALL / ADD COMMAND
+  // 6. INSTALL / ADD COMMAND
   if (command === 'install' || command === 'add') {
     const rawSkillArgs = isKnownCommand ? positionals.slice(1) : positionals;
     let requestedSkills = rawSkillArgs

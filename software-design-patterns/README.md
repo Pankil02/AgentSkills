@@ -1,61 +1,50 @@
-# Software Design Patterns 🏛️⚡
+# Software Design Patterns
 
-A pragmatic, zero-overengineering decision framework and architecture guide for AI coding agents and software engineers.
+A small knowledge skill that makes AI coding agents apply SOLID and the right design pattern to each problem, and keeps them from overengineering.
 
----
+## How it works
 
-## 🎯 Overview
+- `SKILL.md` has about 90 lines and holds the enforced rules plus a **symptom → pattern router**. The agent reads it once.
+- Each reference file has fewer than 120 lines. The agent opens one only when it needs a pattern's Use / Avoid / Shape / Pitfalls.
 
-`software-design-patterns` guides AI agents (and engineers) through selecting, applying, and reviewing software design patterns without introducing accidental complexity.
-
-### Core Philosophy: **"No Pattern by Default"**
-1. Patterns solve **demonstrated architectural forces**, not theoretical design goals.
-2. Direct functions, plain modules, standard library types, or native framework features always beat named abstractions.
-3. Every level of indirection must earn its right to exist through measurable separation of concerns or proven variance axes.
-
----
-
-## 🚀 Installation
-
-### Via Universal Interactive CLI:
-```bash
-npx github:Pankil02/AgentSkills install software-design-patterns --symlink
+```text
+software-design-patterns/
+├── SKILL.md                  # Rules, symptom→pattern router, red flags
+└── references/
+    ├── solid.md              # OOP, UML notation, SRP/OCP/LSP/ISP/DIP
+    ├── creational.md         # Singleton, Builder, Factory, Abstract Factory, Prototype (+DI, Pool)
+    ├── structural.md         # Adapter, Decorator, Proxy, Composite, Facade, Flyweight, Bridge
+    ├── behavioral.md         # Memento, Observer, Strategy, Command, Template Method, Iterator,
+    │                         # State, Mediator, Chain of Responsibility, Visitor, Interpreter, Null Object
+    ├── decisions.md          # Confusable pairs + ride-sharing app worked refactor
+    └── architecture.md       # Layered/Hexagonal, DDD, Outbox, Saga, resilience, concurrency
 ```
 
-### Via `skills.sh` (Vercel):
+## What the agent must do
+
+1. Apply SOLID to any code it adds or changes.
+2. Name the symptom before using a pattern. If there is no symptom, it uses no pattern.
+3. Try the simplest option first: a function, a map, an enum, or composition.
+4. Add an abstraction only when there are two or more implementations or a real boundary.
+5. In reviews, flag both missing patterns and patterns that aren't justified.
+
+## Install
+
 ```bash
+npx github:Pankil02/AgentSkills install software-design-patterns --symlink
+# or
 npx skills@latest add Pankil02/AgentSkills --skill software-design-patterns
 ```
 
----
+## Verify
 
-## 🧠 The Problem-to-Option Decision Map
+```bash
+npm run validate   # frontmatter schema
+npm test
+```
 
-| Observed Force | Start With (Baseline) | Escalate Only When |
-| :--- | :--- | :--- |
-| **Construction varies** | Named constructor / DI | **Factory Method**, **Abstract Factory**, **Builder**, **Object Pool** |
-| **Algorithm varies** | Function / lookup table | **Strategy** (swappable algorithms), **Policy** (named decisions) |
-| **Lifecycle state behavior** | Enum + transition function | **State** (complex state-specific transitions and operations) |
-| **Interface mismatch** | Translation function | **Adapter**, **Anti-Corruption Layer (ACL)** |
-| **Add optional behavior** | Explicit composition | **Decorator** (transparent, orderable wrappers) |
-| **Complex subsystem** | Plain module / use-case fn | **Facade** (simplified stable entry boundary) |
-| **Persistence in domain** | Direct CRUD / SQL | **Repository**, **Data Mapper**, **Unit of Work** |
-| **Cross-boundary consistency**| Local ACID transaction | **Transactional Outbox**, **Saga** (compensating actions) |
-| **Remote failure cascading** | Timeout / deadline | **Exponential Backoff Retry**, **Circuit Breaker**, **Bulkhead** |
-| **System architecture** | Cohesive modules | **Modular Monolith** (escalate to Microservices only for organizational boundaries) |
+Try this manually: ask an agent to "add a new ride type to the fare calculator." It should introduce a Strategy map and should not extend the `switch`. Then ask it to "add a helper for a single constant." It should add no pattern.
 
----
+## License
 
-## 🛠️ Operating Workflow for AI Agents
-
-1. **Inspect First**: Read code, tests, contracts, configuration, and conventions before suggesting architectural changes.
-2. **Frame in Forces**: Identify invariants, stable vs volatile behavior, coupling seams, and operational constraints.
-3. **Establish Baseline**: Check if standard library or direct functions suffice. If yes, stop immediately.
-4. **Compare Candidates**: Compare 2–3 options (including no-pattern). Reject unearned indirection.
-5. **Incremental Seams**: Build 1 seam, migrate callers in small verifiable steps, and preserve existing tests.
-
----
-
-## 📄 License
-
-Licensed under the [MIT License](../LICENSE).
+MIT

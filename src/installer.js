@@ -4,6 +4,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { AGENT_REGISTRY, getAgent, resolveAgentDestination } from './agents.js';
 import { discoverSkills } from './discovery.js';
+import { isEphemeralPath } from './updater.js';
 
 /**
  * Performs atomic installation (copy or symlink) for a single skill.
@@ -290,7 +291,8 @@ export async function executeInstall(options) {
   }
 
   const results = [];
-  const useSymlink = method === 'symlink';
+  // Symlinks into an npx/bunx cache break when the cache is purged; always copy from there.
+  const useSymlink = method === 'symlink' && !isEphemeralPath(path.resolve(repoRoot) + path.sep);
   const processedDestinations = new Map();
 
   for (const agent of targetAgents) {
@@ -335,7 +337,7 @@ export async function executeInstall(options) {
   return {
     timestamp: new Date().toISOString(),
     scope,
-    method,
+    method: useSymlink ? 'symlink' : 'copy',
     dryRun,
     totalInstalled: results.filter(r => r.success).length,
     results

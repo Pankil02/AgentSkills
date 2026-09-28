@@ -8,6 +8,7 @@ import { AGENT_REGISTRY, getAgent, resolveAgentDestination } from '../src/agents
 import { discoverSkills, SkillFrontmatterSchema, extractFrontmatter } from '../src/discovery.js';
 import { installSingleSkill, executeInstall, removeSingleSkill } from '../src/installer.js';
 import { runDoctor } from '../src/doctor.js';
+import { executeUpdate, hashDirectory, isEphemeralPath } from '../src/updater.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -243,6 +244,73 @@ describe('AgentSkills Enterprise Suite', () => {
         const link = fs.readlinkSync(res.targetPath);
         assert.ok(!path.isAbsolute(link), `Expected relative link, got: ${link}`);
       }
+    });
+  });
+
+  describe('Update Engine', () => {
+    const makeProject = (name) => {
+      const cwd = path.join(tempDir, name);
+      fs.mkdirSync(cwd, { recursive: true });
+      return cwd;
+    };
+
+    it('should replace an outdated copy, keep a backup, and never touch project data', async () => {
+      const cwd = makeProject('update-copy');
+      await executeInstall({ repoRoot: REPO_ROOT, skills: ['software-design-patterns'], targets: ['universal'], scope: 'project', method: 'copy', cwd });
+      const installed = path.join(cwd, '.agents', 'skills', 'software-design-patterns');
+      fs.writeFileSync(path.join(installed, 'SKILL.md'), '---\nname: software-design-patterns\ndescription: legacy version of the skill\nversion: 0.9.0\n---\nold');
+      fs.writeFileSync(path.join(installed, 'stale.md'), 'removed upstream');
+      fs.mkdirSync(path.join(cwd, '.memory'));
+      fs.writeFileSync(path.join(cwd, '.memory', 'index.md'), 'user data');
+
+      const dry = executeUpdate({ repoRoot: REPO_ROOT, scope: 'project', cwd, dryRun: true });
+      assert.equal(dry.results.find(r => r.skill === 'software-design-patterns').status, 'would-update');
+      assert.ok(fs.existsSync(path.join(installed, 'stale.md')), 'dry-run must not write');
+
+      const report = executeUpdate({ repoRoot: REPO_ROOT, scope: 'project', cwd });
+      const r = report.results.find(x => x.skill === 'software-design-patterns');
+      assert.equal(r.status, 'updated');
+      assert.equal(r.fromVersion, '0.9.0');
+      assert.equal(hashDirectory(installed), hashDirectory(path.join(REPO_ROOT, 'software-design-patterns')));
+      assert.equal(fs.existsSync(path.join(installed, 'stale.md')), false);
+      assert.ok(fs.existsSync(path.join(r.backedUp, 'stale.md')), 'backup keeps old files');
+      assert.ok(!r.backedUp.startsWith(path.join(cwd, '.agents', 'skills') + path.sep), 'backup lives outside skills dir');
+      assert.equal(fs.readFileSync(path.join(cwd, '.memory', 'index.md'), 'utf8'), 'user data');
+
+      const again = executeUpdate({ repoRoot: REPO_ROOT, scope: 'project', cwd });
+      assert.equal(again.updated, 0);
+    });
+
+    it('should convert a broken symlink into a persistent copy', () => {
+      const cwd = makeProject('update-broken-link');
+      const dest = path.join(cwd, '.agents', 'skills');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.symlinkSync('/nonexistent/_npx/abc/software-design-patterns', path.join(dest, 'software-design-patterns'), 'dir');
+
+      const report = executeUpdate({ repoRoot: REPO_ROOT, scope: 'project', cwd });
+      const r = report.results.find(x => x.skill === 'software-design-patterns');
+      assert.equal(r.status, 'updated');
+      assert.equal(r.mode, 'copy');
+      assert.ok(fs.existsSync(path.join(dest, 'software-design-patterns', 'SKILL.md')));
+    });
+
+    it('should leave symlinks to a user-owned clone alone', () => {
+      const cwd = makeProject('update-own-clone');
+      const clone = path.join(tempDir, 'my-clone', 'software-design-patterns');
+      fs.mkdirSync(clone, { recursive: true });
+      fs.writeFileSync(path.join(clone, 'SKILL.md'), '---\nname: software-design-patterns\ndescription: user clone of the skill\nversion: 1.0.0\n---\n');
+      const dest = path.join(cwd, '.agents', 'skills');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.symlinkSync(clone, path.join(dest, 'software-design-patterns'), 'dir');
+
+      const r = executeUpdate({ repoRoot: REPO_ROOT, scope: 'project', cwd }).results[0];
+      assert.equal(r.status, 'linked');
+      assert.equal(fs.lstatSync(path.join(dest, 'software-design-patterns')).isSymbolicLink(), true);
+    });
+
+    it('should detect package-runner cache paths as ephemeral', () => {
+      assert.equal(isEphemeralPath('/Users/x/.npm/_npx/123/node_modules/pkg/'), true);
+      assert.equal(isEphemeralPath('/Users/x/code/AgentSkills/'), false);
     });
   });
 

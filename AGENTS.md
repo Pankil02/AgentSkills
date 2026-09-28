@@ -22,6 +22,7 @@
 AgentSkills/
 ├── AGENTS.md                       # Master AI agent instructions & repo context (THIS FILE)
 ├── README.md                       # User-facing repository documentation & quickstart
+├── CHANGELOG.md                    # Versioned changes + per-version migration steps (update source of truth)
 ├── package.json                    # Package manifest, dependencies, binaries, scripts
 ├── bin/
 │   ├── cli.js                      # Main enterprise CLI executable (Commander/ParseArgs router)
@@ -31,6 +32,7 @@ AgentSkills/
 │   ├── agents.js                   # Agent registry, path resolvers, auto-detection heuristics
 │   ├── discovery.js                # Dynamic skill discovery & Zod/YAML frontmatter validator
 │   ├── doctor.js                   # Diagnostic engine & filesystem integrity auditor
+│   ├── updater.js                  # In-place update engine (hash diff, atomic swap, backups)
 │   └── installer.js                # Interactive @clack wizard & atomic installation engine
 ├── project-memory/                 # Skill: Persistent Markdown Project Wiki (.memory/)
 │   ├── SKILL.md                    # Root skill specification & agent instructions
@@ -38,11 +40,10 @@ AgentSkills/
 │   ├── references/                 # Extended deep documentation & guides
 │   ├── templates/                  # Standard memory file templates
 │   └── scripts/                    # Platform-specific installers & utilities
-├── software-design-patterns/       # Skill: Zero-Overengineering Pattern Decision Tree
-│   ├── SKILL.md                    # Root skill specification & agent instructions
-│   ├── README.md                   # Decision matrix & pattern comparison guide
-│   ├── references/                 # Deep dives into GoF/Domain/Concurrency patterns
-│   └── examples/                   # Clean idiomatic reference implementations
+├── software-design-patterns/       # Skill: SOLID + symptom→pattern router (knowledge-only)
+│   ├── SKILL.md                    # Enforced rules, router table, red flags (~90 lines)
+│   ├── README.md                   # User-facing overview
+│   └── references/                 # solid, creational, structural, behavioral, decisions, architecture
 ├── tests/
 │   └── cli.test.js                 # Automated unit & integration test suite (node:test)
 └── .github/
@@ -114,7 +115,27 @@ When adding a new skill to this repository:
 
 ---
 
-## 🔒 6. Security & Safety Principles for Agents
+## 🔄 6. Release & Update Protocol (MANDATORY on every skill/CLI change)
+
+Existing users must be able to run `update` and lose nothing. Any agent changing a skill, the CLI, or file layout **must**:
+
+1. **Bump versions (SemVer)**:
+   - Skill `SKILL.md` `version`: patch = wording/fixes · minor = new content, backward compatible · major = renamed/removed files, changed triggers, or changed agent rules.
+   - Root `package.json` `version`: bump whenever any skill or CLI behavior changes (minor for features, major for breaking CLI).
+2. **Update `CHANGELOG.md`** with a new top section `## [x.y.z] — YYYY-MM-DD` containing, per skill: what changed, `breaking` or not, and a **Migration:** line (exact commands / file renames, or `none`).
+3. **Never break users' data**:
+   - Skills must never write to user project data except through their own documented commands (e.g. `memory migrate`).
+   - Data-format changes require an idempotent, `--dry-run`-capable migration command + an `UPGRADE.md` in the skill folder.
+   - Renamed/removed reference files: list old → new paths in the changelog Migration line.
+4. **Keep the updater correct**: if install layout, agent paths, or excluded files change, update `src/updater.js` + `src/agents.js` together and add a test in `tests/cli.test.js` under `Update Engine`.
+5. **Sync docs**: README skill table, this file's layout (§2) and skill summary (§9), and the skill's own `README.md`.
+6. **Verify before commit**: `npm run validate && npm test && node bin/cli.js update --dry-run`.
+
+**Updating as an installed user/agent**: `npx github:Pankil02/AgentSkills update --dry-run` → `update` → apply the CHANGELOG Migration steps between the old and new version. Backups: `<agent-dir>/.agent-skills-backups/`.
+
+---
+
+## 🔒 7. Security & Safety Principles for Agents
 
 - **Atomic Writes & Rollbacks**: Never perform destructive in-place directory replacements without backup or rollback mechanisms.
 - **Symlink Safety**: On Windows, use `junction`; on POSIX, use directory symlinks. Validate target paths to prevent symlink directory traversal attacks.
@@ -123,7 +144,7 @@ When adding a new skill to this repository:
 
 ---
 
-## ⚡ 7. Available CLI Commands for Agents
+## ⚡ 8. Available CLI Commands for Agents
 
 Agents can invoke the internal CLI tool programmatically or via terminal:
 
@@ -140,18 +161,22 @@ node bin/cli.js validate
 # Perform a non-destructive dry-run installation
 node bin/cli.js install all --target universal --dry-run --json
 
+# Preview then apply updates to already-installed skills (all agents, both scopes)
+node bin/cli.js update --dry-run --json
+node bin/cli.js update
+
 # Install with symlink to project workspace
 node bin/cli.js install all --scope project --symlink --yes
 ```
 
 ---
 
-## 📌 8. Summary of Included Core Skills
+## 📌 9. Summary of Included Core Skills
 
 ### `project-memory`
 - **Goal**: Maintain durable project intent, decisions, architecture maps, and task queues in `.memory/`.
 - **Primary Agent Command**: Read `.memory/index.md` on startup; NEVER bulk load `.memory/`; load only the single document needed on demand; run `memory check --for-path <file>` before editing code; run `memory search <query>` before authoring concepts; keep active tasks capped at 5; log append-only milestones.
 
 ### `software-design-patterns`
-- **Goal**: Pragmatic problem-to-option decision tree for software design and architecture.
-- **Primary Agent Command**: Establish a no-pattern / minimal baseline first; escalate to GoF/Domain/Concurrency patterns only under demonstrated forces (coupling, volatility, scale).
+- **Goal**: Enforce SOLID and the correct GoF/architecture pattern per use case, without overengineering.
+- **Primary Agent Command**: Apply SOLID to all touched code; match the code symptom in the `SKILL.md` router; try the baseline (function/map/enum/composition) first; load only the one `references/<category>.md` needed; flag missing and unearned patterns in review.

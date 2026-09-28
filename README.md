@@ -56,6 +56,22 @@ Pass flags to automate installations in scripts or CI/CD pipelines without promp
 
 ---
 
+## ⬆️ Updating Installed Skills
+
+Already using an older version? One command updates every installed skill across all agents and both scopes. Your project data (`.memory/`, source code) is never touched.
+
+```bash
+npx github:Pankil02/AgentSkills update --dry-run   # preview (shows vOld → vNew)
+npx github:Pankil02/AgentSkills update             # apply
+```
+
+- Copied installs are swapped atomically; the old version is kept in `<agent-dir>/.agent-skills-backups/`.
+- Symlinks to your own clone: just `git pull` in the clone.
+- Installed via `skills.sh`: `npx skills@latest update`.
+- Then follow any **Migration** steps in [`CHANGELOG.md`](./CHANGELOG.md) for the versions you skipped.
+
+---
+
 ## 🛠️ CLI Reference
 
 ```
@@ -63,6 +79,7 @@ Usage: agent-skills [command] [options]
 
 Commands:
   install, add [skills...]   Install skills (interactive if no flags provided)
+  update, upgrade [skills...] Update installed skills in place (backups, never touches project data)
   list, ls                 List all available skills in this repository
   doctor, check            Run system diagnostics & verify agent environments
   validate                 Validate all SKILL.md files against schema
@@ -78,6 +95,7 @@ Options:
   --dry-run                Simulate installation without writing to disk
   --json                   Output results in machine-readable JSON format
   --backup                 Create timestamped backup if skill already exists
+  --no-backup              (update) Skip backup of replaced copies
 ```
 
 ---
@@ -87,7 +105,7 @@ Options:
 | Skill | Description | Supported Agents |
 | :--- | :--- | :--- |
 | [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). A polished, token-efficient evolution of Google OKF & LLM Wiki architectures. | Antigravity, Claude Code, Cursor, Pi, Codex, Gemini |
-| [**`software-design-patterns`**](./software-design-patterns) | Pragmatic decision-tree framework for selecting, applying, and reviewing software design patterns without overengineering. | All AI Coding Agents |
+| [**`software-design-patterns`**](./software-design-patterns) | Minimal, token-efficient SOLID + design-pattern router (all 23 GoF + DDD/architecture/resilience) that makes agents apply the right pattern per use case, without overengineering. | All AI Coding Agents |
 
 ---
 

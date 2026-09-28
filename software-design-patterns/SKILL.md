@@ -1,100 +1,79 @@
 ---
 name: software-design-patterns
-description: Selects, applies, refactors, and reviews software design patterns and architectures without overengineering. Use when designing boundaries or extensibility, untangling coupling or conditionals, choosing GoF/domain/data/concurrency/distributed patterns, comparing architectural styles, or reviewing pattern use, reliability, testability, and migration risk. Adapts guidance to the repository's language, framework, conventions, scale, deployment model, and operational constraints.
-version: 1.1.0
+description: Enforces SOLID and the right design pattern for each coding problem, without overengineering. Use when writing, refactoring, or reviewing code that has growing conditionals, tight coupling, complex object construction, interface mismatches, undo/history, event fan-out, lifecycle states, tree structures, or cross-cutting wrappers; or when choosing GoF (creational/structural/behavioral), DDD, architecture, or distributed/resilience patterns. Skip for trivial one-off edits.
+version: 2.0.0
 author: Pankil
 license: MIT
 tags:
-  - architecture
   - design-patterns
+  - solid
+  - low-level-design
+  - architecture
   - refactoring
-  - anti-overengineering
-  - best-practices
 ---
 
-# Software Design Pattern Decisions
+# Software Design Patterns
 
-Patterns solve demonstrated forces, not design goals. Prefer minimal code preserving behavior. Direct functions, modules, stdlib types, or native framework features beat named patterns.
+Mandatory design guidance while coding. Pick the smallest design that resolves a **proven** force. Load one reference file only when you need a pattern's details.
 
-## Operating workflow
+## Rules (enforced on every non-trivial change)
 
-1. **Inspect first.** Read code, tests, contracts, config, boundaries, and conventions. Infer from evidence; don't ask unless blocked.
-2. **Frame in forces.** Map invariants, stable vs varying behavior, change frequency, coupling/seams, ownership, latency/throughput, concurrency, failure modes, idioms, and operational constraints.
-3. **Baseline (no pattern).** Check if direct code, function/module, stdlib, composition, or simple DI suffices. If yes, stop.
-4. **Shortlist & compare.** Compare 2–3 options (including no-pattern). Reject unearned indirection.
-5. **Minimum sufficient form.** State job in 1 sentence (boundary, owner, lifecycle). Use idiomatic names; avoid generic `Manager`/`Factory`/`Strategy` wrappers.
-6. **Incremental change.** Keep public behavior. Add tests, build 1 seam, migrate callers in small steps, keep rollback options, and edit repo code directly.
-7. **Verify.** Test happy/edge/failure paths (plus timeouts, cancellation, retries, backpressure, duplicates for async/distributed). Check telemetry and rollout.
+1. **Inspect first.** Read the surrounding code, tests, and conventions. Match the language's idioms (function > class where the language favors it).
+2. **SOLID is the baseline** for all new or modified code → [references/solid.md](references/solid.md).
+3. **Name the force before the pattern.** Every pattern must map to a symptom in the router below. No symptom → no pattern.
+4. **Baseline first.** Try a plain function, lookup table, enum + `switch` with exhaustiveness, composition, or a native framework feature. Stop if it suffices.
+5. **Rule of two.** Add an interface/abstraction only with ≥2 real implementations, a test seam, or a stable external boundary.
+6. **Composition over inheritance.** Inherit only for true is-a with LSP holding.
+7. **Domain names, not pattern names.** `PricingRule`, not `PricingStrategyFactoryManager`. Mention the pattern in a comment/PR only if it aids understanding.
+8. **Refactor incrementally.** Tests green → introduce one seam → migrate callers → delete old path.
+9. **When reviewing,** flag both missing patterns (symptom present) and unearned ones (pattern without symptom).
 
-## Problem-to-option map
+## Router: symptom → pattern
 
-| Observed force | Start with | Escalate only when |
-|---|---|---|
-| Construction varies | named constructor/factory/DI | **Factory Method** (creator seam), **Abstract Factory** (product families), **Builder** (staged/validated assembly), **Prototype** (cloning exemplars), **Object Pool** (scarce resources) |
-| Algorithm/rule varies | function / lookup table | **Strategy** (swappable algorithms), **Policy** (named decisions), **Template Method** (stable inheritance skeleton) |
-| Lifecycle state behavior | enum + transition fn | **State** (complex state-specific transitions/ops) |
-| Interface mismatch | translation function | **Adapter** (interface bridge), **Anti-Corruption Layer** (isolate domain model from external domain) |
-| Add optional behavior | explicit composition | **Decorator** (transparent, orderable wrappers) |
-| Hard-to-use subsystem | use-case fn/module | **Facade** (simplified stable entry boundary) |
-| Access/remoting/cache | explicit wrapper | **Proxy** (same interface contract; never mask remote I/O as local) |
-| Part-whole hierarchy | recursive data / ADT | **Composite** (uniform operations on leaves & groups) |
-| 2 independent variance axes | composition | **Bridge** (both axes vary independently) |
-| Staged request flow | direct sequence | **Chain of Responsibility** (handlers route/stop), **Pipeline** (sequential stage transformations) |
-| Decouple request/action | callback | **Command** (queue/undo/history), **Mediator** (peer coordination), async broker (cross-process) |
-| Multi-dependent reactions | callbacks | **Observer** (in-process events), **Publish–Subscribe** (broker-decoupled spatial/temporal fan-out) |
-| Persistence in domain | direct CRUD | **Repository** (aggregate queries), **Data Mapper** (object/record isolation), **Unit of Work** (transaction boundary) |
-| Preserve domain invariants | validated values / fns | **Value Objects** & **Aggregate Root** (identity/lifecycle/transactional bounds) |
-| Cross-boundary consistency | local transaction | **Outbox** (reliable pub), **Saga** (multi-service workflow + compensations/idempotency); avoid 2PC unless forced |
-| Asymmetric read/write | single service/model | **CQRS** (demonstrated read/write scale, schema, or security divergence) |
-| Remote failure cascading | timeout / deadline | **Retry** (jittered/bounded), **Circuit Breaker** (stop dead calls), **Bulkhead** (isolate pool capacity) |
-| Concurrency coordination | ownership + immutability | Bounded queue, actor, lock/semaphore, optimistic/pessimistic lock, leader election |
-| Unclear architecture | cohesive modules | Layered/ports boundaries; default **Modular Monolith** over microservices unless team/deployment boundaries force it |
+| Symptom in code | Baseline | Pattern (escalate) | Ref |
+|---|---|---|---|
+| `if/switch` on type/mode picks an algorithm; new variant = edit old code | function map | **Strategy** | B |
+| Behavior changes by lifecycle status; transitions scattered | enum + transition table | **State** | B |
+| Undo/redo, snapshots, rollback of object state | copy of value | **Memento** (+ Command) | B |
+| Many objects must react when one changes | callback | **Observer** | B |
+| Actions must be queued, logged, retried, undone, or scheduled | closure | **Command** | B |
+| Same algorithm skeleton, few steps differ | higher-order function | **Template Method** | B |
+| Traverse a collection without exposing its internals | native iterator/generator | **Iterator** | B |
+| Many peers talk to each other (N×N coupling) | direct calls | **Mediator** | B |
+| Request passes through ordered handlers (auth, validate, log) | sequential calls | **Chain of Responsibility** | B |
+| New operations over a stable, closed type hierarchy | pattern match on ADT | **Visitor** | B |
+| Evaluate a small rule/grammar language | parser lib | **Interpreter** | B |
+| Exactly one shared instance is a real invariant | DI singleton scope | **Singleton** | C |
+| Constructor with many optional params / staged validation | options object | **Builder** | C |
+| Caller must not know which concrete class to create | named constructor | **Factory (Method)** | C |
+| Families of related objects must match (UI theme, cloud vendor) | config object | **Abstract Factory** | C |
+| Creation is expensive; clone a configured exemplar | spread/copy | **Prototype** | C |
+| Third-party/legacy interface doesn't fit ours | translation fn | **Adapter** | S |
+| Add responsibilities (cache, log, retry) without subclass explosion | wrapper fn | **Decorator** | S |
+| Control access: lazy load, auth, cache, remote, rate limit | explicit wrapper | **Proxy** | S |
+| Part–whole tree; treat leaf and group uniformly | recursive data | **Composite** | S |
+| Complex subsystem needs one simple entry point | module function | **Facade** | S |
+| Huge numbers of similar objects exhaust memory | shared constants | **Flyweight** | S |
+| Two dimensions vary independently (shape × renderer) | composition | **Bridge** | S |
+| Domain logic tangled with DB/HTTP/framework | module boundary | Ports & Adapters, Repository | A |
+| Consistency across services / reliable events | local transaction | Outbox, Saga, Idempotency | A |
+| Remote calls fail or cascade | timeout | Retry+jitter, Circuit Breaker, Bulkhead | A |
 
-## Decision gates
+Ref: **B** [behavioral.md](references/behavioral.md) · **C** [creational.md](references/creational.md) · **S** [structural.md](references/structural.md) · **A** [architecture.md](references/architecture.md)
 
-- **No pattern:** Default. Use when 1 implementation exists, no change axis proven, local logic clearer, or framework handles lifecycle.
-- **Interfaces:** Use for real substitution, stable boundaries, or test isolation—never 1 per class. Prefer functions, protocols, traits, or ADTs.
-- **Inheritance:** Requires strict LSP substitutability. Prefer composition for optional behavior.
-- **Singleton:** Process scope != cluster scope. Prefer injected lifetime; use Singleton only when cardinality is a domain invariant.
-- **Microservices:** Require independent scaling/deployment, team boundaries, data isolation, and operational maturity. Code size alone is invalid proof.
-- **Events:** Use for domain facts and fan-out, not hiding call graphs. Define schemas, delivery, ordering, idempotency, and tracing first.
-- **CQRS / Event Sourcing:** Independent choices. Neither is default; both add model complexity, lag, migration, and operational work.
-- **Resilience:** Start with deadlines, bounded resources, and idempotency. Unbudgeted retries amplify outages.
+Confusable pairs & worked refactor: [references/decisions.md](references/decisions.md)
 
-## Implementation rules
+## Red flags (reject or refactor)
 
-- Direct dependencies toward stable domain logic. Isolate I/O, framework, clock, and external clients behind narrow boundaries.
-- Preserve full semantic contracts (error handling, ordering, transactions, auth, cancellation, nullability, timing, serialization).
-- Define state/resource ownership. Bound queues, caches, pools, retries, and subscriptions; define cleanup/shutdown.
-- Prefer immutable values and pure logic. Avoid unnecessary object copying or paradigm forcing.
-- Reuse framework features before building custom containers, buses, iterators, middleware, or pools.
-- Name by domain intent. Pattern names belong in ADRs; use pattern role names in code only when clarifying domain responsibility.
-- Require abstractions to have an active caller, a credible 2nd implementation, and lower test/change cost. Otherwise delete.
+- Interface with one implementation and no test/boundary need.
+- Class named `*Manager`, `*Helper`, `*Util` doing unrelated jobs (SRP violation).
+- Global mutable Singleton used as a service locator.
+- Deep inheritance (>2 levels) or subclasses that throw `NotSupported` (LSP violation).
+- Growing `switch` duplicated in multiple places (missing Strategy/State/polymorphism).
+- High-level code `new`-ing concrete I/O clients (DIP violation).
+- Microservices, CQRS, event sourcing, or buses without a demonstrated scale/team force.
 
-## Response contract
+## Output contract
 
-For non-trivial design/review:
-1. **Forces & assumptions:** Evidence, invariants, constraints, change axes.
-2. **Decision:** Chosen pattern or "no pattern", scope, rationale.
-3. **Alternatives rejected:** 1–2 options and why they fail or add cost.
-4. **Implementation & migration:** Dependency direction, ownership, steps, compatibility.
-5. **Verification & ops:** Tests, failure modes, telemetry, rollout/rollback.
-
-For small changes, summarize in 2–3 sentences.
-
-## Progressive reference loading
-
-Read catalog before implementing:
-
-- GoF & object patterns: [references/object-patterns.md](references/object-patterns.md)
-- Architecture patterns: [references/architecture-patterns.md](references/architecture-patterns.md)
-- DDD & data boundaries: [references/domain-data-patterns.md](references/domain-data-patterns.md)
-- Distributed & concurrency: [references/distributed-concurrency.md](references/distributed-concurrency.md)
-- Pattern comparisons: [references/comparisons.md](references/comparisons.md)
-- Review & refactoring playbook: [references/review-playbook.md](references/review-playbook.md)
-- Worked examples: [examples/README.md](examples/README.md)
-- ADR template: [assets/adr-template.md](assets/adr-template.md)
-- Further reading & sources: [references/further-reading.md](references/further-reading.md)
-- Coverage index: [references/coverage-index.md](references/coverage-index.md)
-
-
+- Small change: apply the design, state the pattern (or "no pattern") in one sentence.
+- Design/review: **Force** → **Choice** (+ 1 rejected alternative, why) → **Migration steps** → **Tests**.
