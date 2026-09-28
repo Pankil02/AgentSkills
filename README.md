@@ -104,7 +104,7 @@ Options:
 
 | Skill | Description | Supported Agents |
 | :--- | :--- | :--- |
-| [**`project-memory`**](./project-memory) | Persistent Markdown project wiki for AI agents (`.memory/`). A polished, token-efficient evolution of Google OKF & LLM Wiki architectures. | Antigravity, Claude Code, Cursor, Pi, Codex, Gemini |
+| [**`project-memory`**](./project-memory) | Token-efficient project memory in `.memory/`: conventions, decisions (with rejected options), scope briefs, architecture flows, and a filtered, auto-archived work log. Agents load only the slice each task needs. | Antigravity, Claude Code, Cursor, Pi, Codex, Gemini |
 | [**`software-design-patterns`**](./software-design-patterns) | Minimal, token-efficient SOLID + design-pattern router (all 23 GoF + DDD/architecture/resilience) that makes agents apply the right pattern per use case, without overengineering. | All AI Coding Agents |
 | [**`plan-walkthrough`**](./plan-walkthrough) | Deep, latency-aware implementation plan saved to `docs/plans/`, plus a short decision walkthrough and a copy-paste handoff prompt for a fresh implementing agent. | All AI Coding Agents |
 

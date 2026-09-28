@@ -34,12 +34,14 @@ AgentSkills/
 │   ├── doctor.js                   # Diagnostic engine & filesystem integrity auditor
 │   ├── updater.js                  # In-place update engine (hash diff, atomic swap, backups)
 │   └── installer.js                # Interactive @clack wizard & atomic installation engine
-├── project-memory/                 # Skill: Persistent Markdown Project Wiki (.memory/)
-│   ├── SKILL.md                    # Root skill specification & agent instructions
-│   ├── README.md                   # Detailed user and agent documentation
-│   ├── references/                 # Extended deep documentation & guides
-│   ├── templates/                  # Standard memory file templates
-│   └── scripts/                    # Platform-specific installers & utilities
+├── project-memory/                 # Skill: token-efficient project memory (.memory/)
+│   ├── SKILL.md                    # Agent contract (copied verbatim to skills/memory/SKILL.md)
+│   ├── README.md / UPGRADE.md      # User docs, migration pointer
+│   ├── src/                        # CLI engine (bundle.ts, repository.ts, cli.ts)
+│   ├── extensions/                 # Pi + Kilo adapters
+│   ├── scripts/                    # Antigravity hook, installers
+│   ├── workflows/ rules/           # mem-init|ingest|sync|log, agent rule
+│   └── skills/memory/              # Packaged skill: SKILL.md, references/, built CLI
 ├── software-design-patterns/       # Skill: SOLID + symptom→pattern router (knowledge-only)
 │   ├── SKILL.md                    # Enforced rules, router table, red flags (~90 lines)
 │   ├── README.md                   # User-facing overview
@@ -177,8 +179,8 @@ node bin/cli.js install all --scope project --symlink --yes
 ## 📌 9. Summary of Included Core Skills
 
 ### `project-memory`
-- **Goal**: Maintain durable project intent, decisions, architecture maps, and task queues in `.memory/`.
-- **Primary Agent Command**: Read `.memory/index.md` on startup; NEVER bulk load `.memory/`; load only the single document needed on demand; run `memory check --for-path <file>` before editing code; run `memory search <query>` before authoring concepts; keep active tasks capped at 5; log append-only milestones.
+- **Goal**: Durable, on-demand project memory in `.memory/`: conventions, decisions (`decisions/D-NNN`), scope briefs, architecture flows, sources, append-only log. No goal/task tracking.
+- **Primary Agent Command**: Only `.memory/index.md` is preloaded; open one file per need. `memory check --for-path <file>` before editing; `memory decisions` before designing; `memory log --recent N` / `memory search` for history; log with `memory log --add`; key changes (decisions, conventions, scope rules, architecture) need 2–3 options with one (Recommended) and explicit approval.
 
 ### `software-design-patterns`
 - **Goal**: Enforce SOLID and the correct GoF/architecture pattern per use case, without overengineering.

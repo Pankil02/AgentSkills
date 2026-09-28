@@ -1,7 +1,7 @@
 {
   "name": "project-memory",
-  "version": "0.1.0",
-  "description": "Persistent Markdown project wiki for Pi, Kilo Code, and Google Antigravity agents",
+  "version": "2.0.0",
+  "description": "Token-efficient project memory (conventions, decisions, log) for Pi, Kilo Code, and Google Antigravity agents",
   "type": "module",
   "license": "MIT",
   "keywords": [

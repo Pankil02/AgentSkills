@@ -16,13 +16,7 @@ const pluginRoot = join(agentsRoot, "plugins", "project-memory");
 const skillsRoot = join(agentsRoot, "skills", "project-memory");
 const globalSkillsRoot = join(homedir(), ".gemini", "config", "skills", "project-memory");
 const hooksPath = join(agentsRoot, "hooks.json");
-const workflowFiles = [
-  "mem-init.md", "memory-init.md",
-  "mem-ingest.md", "memory-ingest.md",
-  "mem-sync.md", "memory-sync.md",
-  "mem-reflect.md", "memory-reflect.md",
-  "mem-tasks.md", "memory-tasks.md",
-];
+const workflowFiles = ["mem-init.md", "mem-ingest.md", "mem-sync.md", "mem-log.md"];
 
 const linkOrCopy = (source, target, isDir = false) => baseLinkOrCopy(source, target, isDir, useSymlink);
 

@@ -20,6 +20,20 @@ npx github:Pankil02/AgentSkills update             # apply (old copies backed up
 
 ---
 
+## [2.0.0] — 2026-09-27
+
+### `project-memory` 2.0.0 (breaking; bundle format 0.2 → 0.3)
+- **Removed**: goal/requirements tracking (`goal.md`, `REQ`/`AC` IDs, lifecycle states, completion checks), task tracking (`tasks.md`, active-task caps, time estimates), `progress.md`, ADHD rules, Grill-Me interviews, `/mem-tasks`, `/mem-reflect`, the Pi `complete` action, and the duplicate `memory-*` workflow files.
+- **Added**: `conventions.md` (commands, `MUST`/`NEVER` rules, pitfalls; governs every path in `memory check`); `decisions/D-NNN-slug.md` via `memory decide` (records rejected options and supersession; only accepted decisions govern); `memory decisions`; `memory log` with `--recent/--type/--since/--query/--all` reads and `--add` writes; monthly log archiving to `log/YYYY-MM.md` during `memory sync`; `/mem-log` workflow; Pi `memory_apply record_decision`.
+- **Changed**: root `index.md` is a pure router showing recent decisions, recent activity, and scopes (about 2 KB). Scope `agents.md` is a brief (Purpose, Map, Rules, Pitfalls). All adapters (Pi, Kilo, Antigravity, AGENTS.md block) share one on-demand loading preamble. Key changes require 2–3 options with one (Recommended) and explicit approval. `archive/` is read-only.
+- **Breaking**: yes. The 1.x CLI cannot write 0.3 bundles, and 2.0 refuses to write 0.2 bundles until you migrate.
+- **Migration:** in each project with `.memory/`, run `memory migrate --dry-run`, then `memory migrate`, then `memory validate`. Old `goal.md`, `progress.md`, `tasks.md`, the root `index.md`, and 0.2 scope `agents.md` files are copied byte-for-byte to `.memory/archive/legacy/<same path>`; the log is kept. Kilo/Antigravity installs: re-run the installer with `--force`, then delete the old `.kilo/command/` or `.agents/workflows/` files `memory-*.md`, `mem-reflect.md`, and `mem-tasks.md`. Removed reference files: `skills/memory/references/interviews.md` and `maintenance.md` (guidance is now in `SKILL.md`). Guide: `project-memory/skills/memory/references/upgrade.md`.
+
+### `software-design-patterns` 2.0.0, `plan-walkthrough` 1.0.0
+- No change.
+
+---
+
 ## [1.3.0] — 2026-09-28
 
 ### `plan-walkthrough` 1.0.0 (new skill, non-breaking)

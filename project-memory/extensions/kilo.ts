@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { isPathInside } from "../src/repository.ts";
-import { buildMemoryContext } from "../src/bundle.ts";
+import { buildMemoryContext, MAINTENANCE_REMINDER } from "../src/bundle.ts";
 
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
@@ -70,7 +70,7 @@ export async function ProjectMemoryKiloPlugin({
       const reminder =
         paths.length === 0
           ? ""
-          : `\n\n[PROJECT MEMORY MAINTENANCE]\nRepository files changed: ${paths.slice(0, 20).join(", ")}${paths.length > 20 ? `, and ${paths.length - 20} more` : ""}. Before handoff, compare the affected work with approved goals and update progress, evidence, append-only history, relevant source/topic pages, and exactly one next action per active unblocked scope. Ask before changing semantic intent.`;
+          : `\n\n${MAINTENANCE_REMINDER}\nChanged: ${paths.slice(0, 20).join(", ")}${paths.length > 20 ? `, and ${paths.length - 20} more` : ""}.`;
       output.system.push(context + reminder);
       if (paths.length > 0) changedPaths.clear();
     },

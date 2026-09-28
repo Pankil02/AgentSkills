@@ -8,7 +8,7 @@ import { parseArgs } from "node:util";
 
 // src/bundle.ts
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { cp, open, lstat as lstat2, mkdir, mkdtemp, readFile as readFile2, readdir as readdir2, realpath as realpath2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
+import { cp, open, lstat as lstat2, mkdir, mkdtemp, readFile as readFile2, readdir as readdir2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename as basename2, dirname as dirname2, extname as extname2, join as join2, relative as relative2, resolve as resolve2, sep as sep2 } from "node:path";
 
@@ -7406,42 +7406,29 @@ function discoverArchitectureLayers(scan, deepScan) {
 
 // src/bundle.ts
 var MEMORY_DIRECTORY = ".memory";
-var MEMORY_VERSION = "0.2";
+var MEMORY_VERSION = "0.3";
+var LEGACY_VERSIONS = /* @__PURE__ */ new Set(["0.1", "0.2"]);
 var RESERVED_FILES = /* @__PURE__ */ new Set(["index.md", "log.md"]);
 var MAX_ROOT_INDEX_BYTES = 6e3;
 var WARN_ROOT_INDEX_BYTES = 4e3;
 var MAX_SCOPE_INDEX_BYTES = 8e3;
 var MAX_AUTO_CONTEXT_BYTES = 6e3;
 var WARN_DOCUMENT_BYTES = 16e3;
-var MAX_ACTIVE_TASKS = 5;
+var WARN_LOG_BYTES = 24e3;
 var MAX_GENERATED_LINE_BYTES = 240;
-var GOAL_STATUSES = /* @__PURE__ */ new Set([
-  "draft",
-  "interviewing",
-  "awaiting-approval",
-  "ready",
-  "active",
-  "blocked",
-  "verifying",
-  "complete",
-  "archived"
-]);
+var INDEX_RECENT_LOG_ENTRIES = 3;
+var INDEX_RECENT_DECISIONS = 5;
 var SOURCE_STATUSES = /* @__PURE__ */ new Set(["new", "integrated", "changed", "stale", "unavailable", "rejected"]);
-var GOAL_TRANSITIONS = {
-  draft: /* @__PURE__ */ new Set(["interviewing", "archived"]),
-  interviewing: /* @__PURE__ */ new Set(["draft", "awaiting-approval", "archived"]),
-  "awaiting-approval": /* @__PURE__ */ new Set(["interviewing", "ready", "archived"]),
-  ready: /* @__PURE__ */ new Set(["active", "archived"]),
-  active: /* @__PURE__ */ new Set(["blocked", "verifying", "archived"]),
-  blocked: /* @__PURE__ */ new Set(["active", "archived"]),
-  verifying: /* @__PURE__ */ new Set(["active", "blocked", "complete"]),
-  complete: /* @__PURE__ */ new Set(["active", "archived"]),
-  archived: /* @__PURE__ */ new Set(["draft"])
-};
+var DECISION_STATUSES = /* @__PURE__ */ new Set(["accepted", "superseded", "deprecated"]);
+var SEMANTIC_EVENT_TYPES = /* @__PURE__ */ new Set(["decision", "correction", "reversal", "scope", "preference", "contradiction-resolution"]);
 var FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/;
-var ROOT_CORE_FILES = ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"];
+var ROOT_REQUIRED_FILES = ["index.md", "log.md"];
+var ROOT_RECOMMENDED_FILES = ["conventions.md", "decisions/index.md"];
 var SCOPE_CORE_FILES = ["agents.md", "log.md"];
-var ROOT_ONLY_FILES = /* @__PURE__ */ new Set(["goal.md", "progress.md", "tasks.md"]);
+var LEGACY_FILES = /* @__PURE__ */ new Set(["goal.md", "progress.md", "tasks.md"]);
+var ARCHIVE_DIRECTORY = "archive";
+var DECISIONS_DIRECTORY = "decisions";
+var DECISION_FILE_PATTERN = /^D-(\d{3,})-[a-z0-9-]+\.md$/;
 var MAX_CONTEXT_PREVIEW = 2e4;
 function normalizeSlash(path) {
   return path.split(sep2).join("/");
@@ -7628,7 +7615,7 @@ async function assertWritableBundleVersion(projectRoot, allowMissing = false, al
   const parsed = parseMarkdown(content);
   if (!parsed.hasFrontmatter || parsed.errors.length > 0) throw new Error("Root index has invalid frontmatter; repair it before mutation");
   if (parsed.data.memory_version !== MEMORY_VERSION) {
-    if (allowLegacyMigration && parsed.data.memory_version === "0.1") return;
+    if (allowLegacyMigration && typeof parsed.data.memory_version === "string" && LEGACY_VERSIONS.has(parsed.data.memory_version)) return;
     throw new Error(`Unsupported writable memory_version: ${String(parsed.data.memory_version)} (expected ${MEMORY_VERSION})`);
   }
 }
@@ -7650,96 +7637,108 @@ async function plannedWrite(path, content, dryRun, overwrite = true) {
     afterHash: hashText(content)
   };
 }
-function rootIndexTemplate(projectName, timestamp2, head, deepScan, fingerprint, detectedLayers = ["system-design", "domain", "security"]) {
-  const stackParts = [];
-  if (deepScan?.techStack.languages.length) stackParts.push(deepScan.techStack.languages.join(", "));
-  if (deepScan?.techStack.frameworks.length) stackParts.push(deepScan.techStack.frameworks.slice(0, 3).join(", "));
-  if (deepScan?.techStack.testingTools.length) stackParts.push(deepScan.techStack.testingTools.slice(0, 2).join(", "));
-  const stack = stackParts.length > 0 ? stackParts.join("; ") : "Node.js, TypeScript / JavaScript";
-  let shape = "CLI in `bin/`; runtime in `src/`; skills at repository root.";
+function detectedStack(deepScan) {
+  const parts = [];
+  if (deepScan?.techStack.languages.length) parts.push(deepScan.techStack.languages.join(", "));
+  if (deepScan?.techStack.frameworks.length) parts.push(deepScan.techStack.frameworks.slice(0, 3).join(", "));
+  if (deepScan?.techStack.testingTools.length) parts.push(deepScan.techStack.testingTools.slice(0, 2).join(", "));
+  return parts.length > 0 ? parts.join("; ") : "Unconfirmed";
+}
+function detectedShape(deepScan) {
   if (deepScan?.architecture.packages.length) {
-    shape = `Monorepo with ${deepScan.architecture.packages.length} package(s): ${deepScan.architecture.packages.slice(0, 3).map((p) => `\`${p.path}\``).join(", ")}${deepScan.architecture.packages.length > 3 ? "..." : ""}`;
-  } else if (deepScan?.architecture.entryPoints.length) {
-    shape = `Entry points: ${deepScan.architecture.entryPoints.slice(0, 3).map((e) => `\`${e}\``).join(", ")}`;
+    const packages = deepScan.architecture.packages;
+    return `Monorepo, ${packages.length} package(s): ${packages.slice(0, 3).map((p) => `\`${p.path}\``).join(", ")}${packages.length > 3 ? ", \u2026" : ""}`;
   }
-  const routeOrder = ["frontend", "gateway-edge", "auth", "backend", "domain", "database"];
-  const activeRoute = routeOrder.filter((l) => detectedLayers.includes(l)).map((l) => titleFromPath(l)).join(" \u2192 ") || "Domain";
+  if (deepScan?.architecture.entryPoints.length) {
+    return `Entry points: ${deepScan.architecture.entryPoints.slice(0, 3).map((e) => `\`${e}\``).join(", ")}`;
+  }
+  return "Unconfirmed";
+}
+function rootIndexTemplate(projectName, timestamp2, head, deepScan, fingerprint) {
   return serializeMarkdown({
     memory_version: MEMORY_VERSION,
     architecture_mode: "ddd",
     architecture_index: "/architecture/",
     system_flow: "/architecture/system-design/Flow.md",
     project: projectName,
-    summary: `${projectName} project memory root.`,
-    active_scope: ".",
-    active_objective: "OBJ-001",
-    status: "draft",
-    title: `${projectName} Project Memory`,
-    description: "Executive memory capsule.",
+    title: `${projectName} memory`,
+    description: "Router for project memory. Only file preloaded into agent context.",
     timestamp: timestamp2,
     repository_head: head ?? null,
     repository_fingerprint: fingerprint ?? null,
     last_scan_at: timestamp2
-  }, `# Project Memory
+  }, `# ${projectName} memory
 
-> **TOKEN EFFICIENCY**: DO NOT load all memory files. Read ONLY the single path needed for your task.
+> Preloaded router. Open ONE linked file per need. Prefer \`memory search\` / \`memory log\` over reading whole files.
 
 ## Project
-- Purpose: ${projectName} project.
-- Stack: ${stack}
-- Shape: ${shape}
-- DDD: mandatory; context: [Domain flow](/architecture/domain/Flow.md)
-- Head/fingerprint: ${head ?? "none"} / ${fingerprint ?? "none"}
-
-## Now
-<!-- memory:generated:start active -->
-- Objective: [OBJ-001](/goal.md) Project goal.
-- Active scope: [Project](/goal.md)
-- State: draft
-- Next action: Complete interview.
-- Blocker: none
-<!-- memory:generated:end active -->
-
-## Architecture
-- Start: [System flow](/architecture/system-design/Flow.md)
-- Domain: [Context map](/architecture/domain/Flow.md)
-- Security: [Trust flow](/architecture/security/Flow.md)
-- Route: ${activeRoute}
-- Full map: [Architecture index](/architecture/)
-
-## Structure & File Tree
-\`\`\`text
-.memory/
-\u251C\u2500\u2500 index.md             # Router (< 4 KB)
-\u251C\u2500\u2500 goal.md              # Requirements & AC
-\u251C\u2500\u2500 progress.md          # Evidence & status
-\u251C\u2500\u2500 tasks.md             # Next action (\u22645)
-\u251C\u2500\u2500 log.md               # History
-\u251C\u2500\u2500 architecture/        # Dynamic flow contracts
-\u2502   \u251C\u2500\u2500 index.md         # Layer registry
-\u2502   \u251C\u2500\u2500 system-design/   # Topology & entry
-\u2502   \u251C\u2500\u2500 domain/          # DDD invariants
-\u2502   \u2514\u2500\u2500 security/        # Trust & auth
-\u251C\u2500\u2500 sources/             # Sources & briefs
-\u2514\u2500\u2500 <scope>/             # Scope agents.md & log.md
-\`\`\`
+- Stack: ${detectedStack(deepScan)}
+- Shape: ${detectedShape(deepScan)}
 
 ## Find
-| Need | Read / Command |
+| Need | Open / run |
 |---|---|
-| Next action | [.memory/tasks.md](/tasks.md) |
-| Requirements | [.memory/goal.md](/goal.md) |
-| Verification | [.memory/progress.md](/progress.md) |
-| Domain logic | [.memory/architecture/domain/Flow.md](/architecture/domain/Flow.md) |
-| Code check | \`memory check --for-path <file>\` |
-| Search | \`memory search <keywords>\` |
-| History | [.memory/log.md](/log.md) |
-| Full map | \`memory map\` |
+| Build/test commands, coding rules, pitfalls | [conventions.md](/conventions.md) |
+| Why something is built this way | [decisions/](/decisions/) \xB7 \`memory decisions\` |
+| Rules for a file before editing | \`memory check --for-path <file>\` |
+| Domain language & invariants | [domain Flow](/architecture/domain/Flow.md) |
+| System topology & entry points | [system Flow](/architecture/system-design/Flow.md) |
+| Trust boundaries & auth | [security Flow](/architecture/security/Flow.md) |
+| What changed recently | \`memory log --recent 10\` |
+| Anything else | \`memory search <keywords>\` |
+| Provenance of external facts | [sources/](/sources/) |
+| Full code tree | \`memory map\` |
 
-## Active scopes
+## Recent decisions
+<!-- memory:generated:start decisions -->
+- none
+<!-- memory:generated:end decisions -->
+
+## Recent activity
+<!-- memory:generated:start recent -->
+- none
+<!-- memory:generated:end recent -->
+
+## Scopes
 <!-- memory:generated:start scopes -->
-- [Project](/goal.md) \u2014 active
+- Project root only.
 <!-- memory:generated:end scopes -->`);
+}
+function conventionsTemplate(timestamp2, deepScan) {
+  const observed = [];
+  if (deepScan?.techStack.packageManager) observed.push(`- Package manager: \`${deepScan.techStack.packageManager}\` (observed)`);
+  if (deepScan?.techStack.buildSystem) observed.push(`- Build system: \`${deepScan.techStack.buildSystem}\` (observed)`);
+  if (deepScan?.techStack.testingTools.length) observed.push(`- Test tools: ${deepScan.techStack.testingTools.join(", ")} (observed)`);
+  return serializeMarkdown({
+    type: "Conventions",
+    title: "Conventions",
+    description: "Build and test commands, binding coding rules, and known pitfalls.",
+    scope: ".",
+    timestamp: timestamp2
+  }, `# Conventions
+
+> Project-wide rules. Lines starting \`MUST:\` / \`MUST NOT:\` / \`NEVER:\` are surfaced by \`memory check\` for every path.
+
+## Commands
+${observed.join("\n") || "- none recorded"}
+
+## Rules
+- none recorded
+
+## Pitfalls
+- none recorded
+`);
+}
+function decisionsIndexTemplate() {
+  return `# Decisions
+
+> One file per durable decision (\`D-NNN-slug.md\`). Never rewrite: supersede with \`memory decide --supersedes D-NNN\`.
+
+<!-- memory:generated:start decisions -->
+| ID | Status | Date | Decision |
+|---|---|---|---|
+<!-- memory:generated:end decisions -->
+`;
 }
 function architectureIndexTemplate(layers, timestamp2) {
   const tableRows = layers.map((layer) => {
@@ -8102,156 +8101,17 @@ function indexTemplate(title) {
 <!-- memory:generated:end tests -->
 `;
 }
-function goalTemplate(scope, timestamp2, initialContext) {
-  const title = titleFromPath(scope);
-  let body = `# Goal
-
-## Motivation
-
-Pending interview.
-
-## User & outcome
-
-## Success measures
-
-## Scope & non-goals
-
-## Confirmed wants
-
-## Must-not rules
-
-## Requirements
-
-## Acceptance criteria
-
-Use stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.
-
-## Constraints & dependencies
-`;
-  if (initialContext) {
-    body += `
-### Context from AGENTS.md
-
-${initialContext}
-`;
-  }
-  body += `
-## Decisions & reversals
-
-## Questions & unresolved
-
-## Interview coverage
-
-- **Decisions:** 0 / ${scope === "." ? "10\u201320" : "10\u201315"}
-- **State:** pending
-
-## Citations`;
-  return serializeMarkdown({
-    type: "Goal",
-    title: `${title} goal`,
-    description: `Goal for ${scope === "." ? "project" : scope}.`,
-    timestamp: timestamp2,
-    scope,
-    status: "draft",
-    provenance: initialContext ? "observed" : "unresolved",
-    uid: randomUUID()
-  }, body);
-}
-function progressTemplate(scope, timestamp2) {
-  const title = titleFromPath(scope);
-  return serializeMarkdown({
-    type: "Progress",
-    title: `${title} progress`,
-    description: `Progress for ${scope === "." ? "project" : scope}.`,
-    timestamp: timestamp2,
-    scope,
-    goal: "./goal.md",
-    uid: randomUUID()
-  }, `# Progress
-
-## Current state
-
-Not started.
-
-## Completed work
-
-## Current work
-
-## Blockers & drift
-
-## Acceptance evidence
-
-| Criterion | Status | Evidence |
-|---|---|---|
-
-## Latest verification
-
-## Next action
-
-- **Action:** Complete interview.
-- **Reason:** Intent pending approval.
-- **Requirement:** Unresolved.
-- **Likely files:** Unknown.
-- **Verification:** User approval.
-- **Approval:** pending
-
-## Handoff
-
-Continue interview.`);
-}
-function tasksTemplate(scope, timestamp2) {
-  const title = titleFromPath(scope);
-  return serializeMarkdown({
-    type: "Tasks",
-    title: `${title} tasks`,
-    description: `Task breakdown for ${scope === "." ? "project" : scope} formatted with ADHD and project-memory principles.`,
-    timestamp: timestamp2,
-    scope,
-    uid: randomUUID()
-  }, `# Tasks
-
-## Single next action
-
-- **Action:** Define project requirements & task list.
-- **File / Command:** Edit \`.memory/tasks.md\` or run \`/memory-init\`.
-- **Time estimate:** [5 min]
-
-## Current state
-
-Step 0 of 0 done: Pending task breakdown. Next: Define initial tasks.
-
-## Active tasks (Do Now)
-
-> [!NOTE]
-> Maximum 5 active items. Numbered single-bounded steps only.
-
-1. [ ] **Define project requirements** \`[15 min]\` (REQ-001) \u2014 Specify main features in \`goal.md\`
-2. [ ] **Scaffold feature scopes** \`[10 min]\` (REQ-002) \u2014 Set up tracked scopes in \`.memory/\`
-
-## Backlog (Do Later)
-
-- [ ] **Acceptance criteria verification** \`[30 min]\` (AC-001) \u2014 Map test evidence paths
-
-## Completed tasks summary
-
-- **Total completed:** 0
-- **Summary:** No tasks completed yet.
-`);
-}
 function logTemplate(scope, timestamp2) {
-  return `# ${titleFromPath(scope)} History
+  return `# ${titleFromPath(scope)} log
+
+> Append-only, newest first. Write via \`memory log --add\`; read via \`memory log --recent N\`.
 
 ## ${today(timestamp2)}
 
-### Initialization
-- **Update:** Initialized \`${scope}\` memory.
-- **Evidence:** System init.
+### Init \u2014 \`evt-init\`
+- **Type:** init
+- **Summary:** Initialized \`${scope}\` memory.
 `;
-}
-function allDirectoryPrefixes(scope) {
-  if (scope === ".") return [];
-  const parts = scope.split("/");
-  return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
 }
 function scopeDirectory(projectRoot, scope) {
   return scope === "." ? bundlePath(projectRoot) : safeBundleFile(projectRoot, scope);
@@ -8259,250 +8119,46 @@ function scopeDirectory(projectRoot, scope) {
 function relativeChangePath(projectRoot, absolute) {
   return normalizeSlash(relative2(projectRoot, absolute));
 }
-function buildDeepGoalContent(scope, timestamp2, initialContext, deepScan) {
-  const title = titleFromPath(scope);
-  const tech = deepScan.techStack;
-  const arch = deepScan.architecture;
-  const env = deepScan.environment;
-  let body = `# Goal
-
-## Auto-Detected Architecture & Tech Stack
-
-`;
-  if (tech.languages.length > 0) body += `- **Languages:** ${tech.languages.join(", ")}
-`;
-  if (tech.frameworks.length > 0) body += `- **Frameworks & Libraries:** ${tech.frameworks.join(", ")}
-`;
-  if (tech.monorepo) body += `- **Monorepo Structure:** ${tech.monorepo}
-`;
-  if (tech.packageManager) body += `- **Package Manager:** ${tech.packageManager}
-`;
-  if (tech.buildSystem) body += `- **Build System:** ${tech.buildSystem}
-`;
-  if (tech.testingTools.length > 0) body += `- **Testing Stack:** ${tech.testingTools.join(", ")}
-`;
-  if (arch.packages.length > 0) {
-    body += `
-### Monorepo Packages & Features
-
-`;
-    for (const pkg of arch.packages) {
-      body += `- **\`${pkg.path}\`**: ${pkg.name || titleFromPath(pkg.path)}${pkg.description ? ` \u2014 ${pkg.description}` : ""}
-`;
-    }
+function scopeArchitectureSummary(scope, deepScan) {
+  if (!deepScan) return `- Code root: \`${scope}/\``;
+  const within = (items) => items.filter((item) => item.startsWith(`${scope}/`)).slice(0, 8);
+  const fileCount = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`)).length;
+  const lines = [`- Code root: \`${scope}/\` (${fileCount} files, observed)`];
+  const groups = [
+    ["Entry points", within(deepScan.architecture.entryPoints)],
+    ["API routes", within(deepScan.architecture.apiRoutes)],
+    ["Schemas", within(deepScan.architecture.databaseSchemas)]
+  ];
+  for (const [label, items] of groups) {
+    if (items.length > 0) lines.push(`- ${label}: ${items.map((item) => `\`${item}\``).join(", ")}`);
   }
-  if (arch.entryPoints.length > 0) {
-    body += `
-### Primary Entry Points
-
-`;
-    for (const ep of arch.entryPoints.slice(0, 10)) body += `- \`${ep}\`
-`;
-  }
-  if (arch.databaseSchemas.length > 0) {
-    body += `
-### Database Schemas & Models
-
-`;
-    for (const schema4 of arch.databaseSchemas.slice(0, 10)) body += `- \`${schema4}\`
-`;
-  }
-  if (arch.apiRoutes.length > 0) {
-    body += `
-### Discovered API Surface
-
-`;
-    for (const route of arch.apiRoutes.slice(0, 15)) body += `- \`${route}\`
-`;
-  }
-  if (env.envVariables.length > 0) {
-    body += `
-### Required Environment Variables
-
-`;
-    for (const varName of env.envVariables.slice(0, 20)) body += `- \`${varName}\`
-`;
-  }
-  if (env.configFiles.length > 0 || env.infrastructure.length > 0) {
-    body += `
-### Tooling & Infrastructure Configurations
-
-`;
-    for (const config of [...env.configFiles, ...env.infrastructure].slice(0, 15)) body += `- \`${config}\`
-`;
-  }
-  body += `
-## Motivation
-
-Deep codebase ingestion scan performed during project initialization.
-
-## User & outcome
-
-## Success measures
-
-## Scope & non-goals
-
-## Confirmed wants
-
-## Must-not rules
-
-## Requirements
-
-## Acceptance criteria
-
-Use stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.
-
-## Constraints & dependencies
-`;
-  if (initialContext) {
-    body += `
-### Context from AGENTS.md
-
-${initialContext}
-`;
-  }
-  body += `
-## Decisions & reversals
-
-## Questions & unresolved
-
-## Interview coverage
-
-- **Decisions:** 0 / 10\u201320
-- **State:** pending
-
-## Citations`;
-  return serializeMarkdown({
-    type: "Goal",
-    title: `${title} goal`,
-    description: `Goal for project.`,
-    timestamp: timestamp2,
-    scope: ".",
-    status: "draft",
-    provenance: "observed",
-    uid: randomUUID()
-  }, body);
+  return lines.join("\n");
 }
 function buildScopeAgentsContent(scope, timestamp2, deepScan) {
   const title = titleFromPath(scope);
-  let archSummary = "";
-  if (deepScan) {
-    const scopeFiles = deepScan.scan.files.filter((f) => f.path.startsWith(`${scope}/`));
-    const entryPoints = deepScan.architecture.entryPoints.filter((e) => e.startsWith(`${scope}/`));
-    const apiRoutes = deepScan.architecture.apiRoutes.filter((r) => r.startsWith(`${scope}/`));
-    const schemas2 = deepScan.architecture.databaseSchemas.filter((s) => s.startsWith(`${scope}/`));
-    archSummary = `Auto-scaffolded scope for \`${scope}\` (${scopeFiles.length} files).
-
-`;
-    if (entryPoints.length > 0) {
-      archSummary += `### Entry Points
-
-`;
-      for (const ep of entryPoints) archSummary += `- \`${ep}\`
-`;
-      archSummary += `
-`;
-    }
-    if (apiRoutes.length > 0) {
-      archSummary += `### API Routes
-
-`;
-      for (const route of apiRoutes) archSummary += `- \`${route}\`
-`;
-      archSummary += `
-`;
-    }
-    if (schemas2.length > 0) {
-      archSummary += `### Schemas & Models
-
-`;
-      for (const schema4 of schemas2) archSummary += `- \`${schema4}\`
-`;
-      archSummary += `
-`;
-    }
-  } else {
-    archSummary = `Tracked scope for \`${scope}\`.
-
-`;
-  }
-  const body = `# ${title} Agents
-
-> Combined instructions, architecture summary, goal requirements, progress, and tasks for \`${scope}\`.
-
-## Scope Architecture & Summary
-
-${archSummary.trimEnd()}
-
-## Goal & Requirements
-
-### Motivation
-Pending interview.
-
-### User & outcome
-
-### Success measures
-
-### Scope & non-goals
-
-### Confirmed wants
-
-### Must-not rules
-
-### Requirements
-
-### Acceptance criteria
-Use stable IDs in the \`AC-NNN\` form. Each criterion must be independently verifiable.
-
-### Constraints & dependencies
-
-## Current State & Progress
-
-### Current state
-Not started.
-
-### Blockers & drift
-none
-
-### Acceptance evidence
-| Criterion | Status | Evidence |
-|---|---|---|
-
-## Tasks & Action Items
-
-### Single next action
-- **Action:** Define scope requirements & task breakdown.
-- **File / Command:** Edit \`.memory/${scope}/agents.md\`.
-- **Time estimate:** [5 min]
-- **Requirement:** Unresolved
-- **Likely files:** \`${scope}/\`
-- **Verification:** User approval
-- **Approval:** pending
-
-### Active tasks (Do Now)
-> [!NOTE]
-> Maximum 5 active items. Numbered single-bounded steps only.
-
-1. [ ] **Define scope requirements** \`[10 min]\` (REQ-001) \u2014 Specify main features for \`${scope}\`
-2. [ ] **Verify scope boundaries** \`[10 min]\` (REQ-002) \u2014 Confirm inputs, outputs, and dependencies
-
-### Backlog (Do Later)
-- [ ] **Acceptance criteria verification** \`[20 min]\` (AC-001) \u2014 Map test evidence paths
-
-### Completed tasks summary
-- **Total completed:** 0
-- **Summary:** No tasks completed yet.
-`;
   return serializeMarkdown({
     type: "Agents",
-    title: `${title} agents`,
-    description: `Combined agent instructions, goal, progress, and tasks for ${scope}.`,
-    timestamp: timestamp2,
+    title: `${title} scope`,
+    description: `Purpose, map, rules, and pitfalls for code under ${scope}.`,
     scope,
-    status: "draft",
+    code_refs: [`${scope}/**`],
+    governance: "active",
     provenance: deepScan ? "observed" : "unresolved",
-    uid: randomUUID()
-  }, body);
+    timestamp: timestamp2
+  }, `# ${title} scope
+
+## Purpose
+- Unconfirmed.
+
+## Map
+${scopeArchitectureSummary(scope, deepScan)}
+
+## Rules
+- none recorded
+
+## Pitfalls
+- none recorded
+`);
 }
 async function initializeBundle(projectRoot, scopes = [], options = {}) {
   const root = resolve2(projectRoot);
@@ -8525,17 +8181,14 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
   for (const scope of normalizedScopes) {
     await assertNoBundleParentSymlink(join2(scopeDirectory(root, scope), "agents.md"));
   }
-  const unmanagedAgents = await readUnmanagedAgentsContent(root);
   const changes = [];
   const initialScan = deepScan ? deepScan.scan : await scanRepository(root);
   const discovery = discoverArchitectureLayers(initialScan, deepScan);
-  const rootGoalContent = deepScan ? buildDeepGoalContent(".", timestamp2, unmanagedAgents, deepScan) : goalTemplate(".", timestamp2, unmanagedAgents);
   const rootFiles = /* @__PURE__ */ new Map([
-    [join2(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename2(root), timestamp2, head, deepScan, initialScan.fingerprint, discovery.detectedLayers)],
-    [join2(memoryRoot, "goal.md"), rootGoalContent],
-    [join2(memoryRoot, "progress.md"), progressTemplate(".", timestamp2)],
-    [join2(memoryRoot, "tasks.md"), tasksTemplate(".", timestamp2)],
+    [join2(memoryRoot, "index.md"), rootIndexTemplate(options.projectName ?? basename2(root), timestamp2, head, deepScan, initialScan.fingerprint)],
+    [join2(memoryRoot, "conventions.md"), conventionsTemplate(timestamp2, deepScan)],
     [join2(memoryRoot, "log.md"), logTemplate(".", date)],
+    [join2(memoryRoot, DECISIONS_DIRECTORY, "index.md"), decisionsIndexTemplate()],
     [join2(memoryRoot, "sources", "index.md"), indexTemplate("Sources")],
     [join2(memoryRoot, "architecture", "index.md"), architectureIndexTemplate(discovery.detectedLayers, timestamp2)]
   ]);
@@ -8554,9 +8207,8 @@ async function initializeBundle(projectRoot, scopes = [], options = {}) {
   const tracked = [".", ...normalizedScopes];
   for (const scope of normalizedScopes) {
     const directory = scopeDirectory(root, scope);
-    const scopeAgentsContent = buildScopeAgentsContent(scope, timestamp2, deepScan);
     const files = /* @__PURE__ */ new Map([
-      [join2(directory, "agents.md"), scopeAgentsContent],
+      [join2(directory, "agents.md"), buildScopeAgentsContent(scope, timestamp2, deepScan)],
       [join2(directory, "log.md"), logTemplate(scope, date)]
     ]);
     for (const [path, content] of files) changes.push({ ...await plannedWrite(path, content, dryRun, false), path: relativeChangePath(root, path) });
@@ -8625,25 +8277,21 @@ async function discoverTrackedScopes(projectRoot) {
   const memoryRoot = bundlePath(projectRoot);
   const walk = await walkMemory(memoryRoot);
   const directories = /* @__PURE__ */ new Set();
-  if (await readIfExists(join2(memoryRoot, "goal.md")) !== void 0 && await readIfExists(join2(memoryRoot, "progress.md")) !== void 0 && await readIfExists(join2(memoryRoot, "log.md")) !== void 0) {
+  if (await readIfExists(join2(memoryRoot, "index.md")) !== void 0 && await readIfExists(join2(memoryRoot, "log.md")) !== void 0) {
     directories.add(".");
   }
   for (const file of walk.files) {
     const directory = dirname2(file);
     if (directory === memoryRoot) continue;
-    if (isPathInside(join2(memoryRoot, "architecture"), directory) || isPathInside(join2(memoryRoot, "sources"), directory)) continue;
-    const base = basename2(file);
-    if (base === "agents.md") {
-      if (await readIfExists(join2(directory, "log.md")) !== void 0) {
-        directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
-      }
-    } else if (base === "goal.md") {
-      if (await readIfExists(join2(directory, "progress.md")) !== void 0 && await readIfExists(join2(directory, "log.md")) !== void 0) {
-        directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
-      }
+    if (isReservedBundleDirectory(memoryRoot, directory)) continue;
+    if (basename2(file) === "agents.md" && await readIfExists(join2(directory, "log.md")) !== void 0) {
+      directories.add(scopeFromMemoryDirectory(memoryRoot, directory));
     }
   }
   return [...directories].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b));
+}
+function isReservedBundleDirectory(memoryRoot, directory) {
+  return ["architecture", "sources", DECISIONS_DIRECTORY, ARCHIVE_DIRECTORY].some((name) => isPathInside(join2(memoryRoot, name), directory));
 }
 async function generateDocumentsList(files, dir, pathPrefix, emptyMessage) {
   const directDocuments = files.filter((file) => dirname2(file) === dir && !RESERVED_FILES.has(basename2(file)));
@@ -8691,6 +8339,7 @@ async function syncIndexes(projectRoot, scan, options = {}) {
   const discovery = scan ? discoverArchitectureLayers(scan) : void 0;
   try {
     for (const directory of [...directories].sort()) {
+      if (isArchivedBundlePath(`${normalizeSlash(relative2(memoryRoot, directory))}/`)) continue;
       const scope = scopeFromMemoryDirectory(memoryRoot, directory);
       const isArchRoot = directory === archDir;
       const isArchLayer = dirname2(directory) === archDir;
@@ -8736,11 +8385,15 @@ async function syncIndexes(projectRoot, scan, options = {}) {
       let content = await readIfExists(indexPath);
       if (!content) {
         if (directory === memoryRoot) {
-          content = rootIndexTemplate(basename2(root), nowIso(options.now), fallbackHead, void 0, scan?.fingerprint, discovery?.detectedLayers);
+          content = rootIndexTemplate(basename2(root), nowIso(options.now), fallbackHead, void 0, scan?.fingerprint);
         } else if (isArchRoot) {
           content = architectureIndexTemplate(discovery?.detectedLayers ?? [...MANDATORY_ARCHITECTURE_LAYERS], nowIso(options.now));
         } else if (directory === join2(memoryRoot, "sources")) {
           content = indexTemplate("Sources");
+        } else if (directory === join2(memoryRoot, DECISIONS_DIRECTORY)) {
+          content = decisionsIndexTemplate();
+        } else if (isReservedBundleDirectory(memoryRoot, directory)) {
+          continue;
         } else {
           const agentsPath = join2(directory, "agents.md");
           let agentsContent = await readIfExists(agentsPath);
@@ -8756,101 +8409,26 @@ async function syncIndexes(projectRoot, scan, options = {}) {
       if (directory === memoryRoot) {
         const rootParsed = parseMarkdown(content);
         if (!rootParsed.hasFrontmatter || rootParsed.errors.length > 0) throw new Error("Root index.md must contain valid frontmatter");
-        const activeScope = typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
-        let nextClean = "Not set.";
-        let blockerClean = "none";
-        let goalStatus = typeof rootParsed.data.status === "string" ? rootParsed.data.status : "draft";
-        let objectiveId = typeof rootParsed.data.active_objective === "string" ? rootParsed.data.active_objective : "OBJ-001";
-        let objectiveTitle = "";
-        if (activeScope === ".") {
-          const progressPath = join2(memoryRoot, "progress.md");
-          const progress = await readIfExists(progressPath);
-          const next = progress ? extractSection(progress, "Next action").trim() : "No active next action.";
-          nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
-          const blockers = progress ? extractSection(progress, "Blockers & drift").trim() : "";
-          blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
-          const goalPath = join2(memoryRoot, "goal.md");
-          const goalContent = await readIfExists(goalPath);
-          const goalParsed = goalContent ? parseMarkdown(goalContent) : void 0;
-          if (goalParsed?.data.status) goalStatus = String(goalParsed.data.status);
-          if (goalContent) {
-            const objMatch = /^##\s+([A-Z0-9_-]+)(?:\s+[—–-]\s+(.+))?$/m.exec(goalContent);
-            if (objMatch) {
-              objectiveId = objMatch[1];
-              objectiveTitle = objMatch[2] ? ` ${objMatch[2].trim()}` : "";
-            } else if (goalParsed?.data.title && typeof goalParsed.data.title === "string" && !goalParsed.data.title.toLowerCase().endsWith("goal")) {
-              objectiveTitle = ` ${goalParsed.data.title}`;
-            }
-          }
-        } else {
-          const agentsPath = join2(scopeDirectory(root, activeScope), "agents.md");
-          const agentsContent = await readIfExists(agentsPath);
-          if (agentsContent) {
-            const agentsParsed = parseMarkdown(agentsContent);
-            if (agentsParsed.data.status) goalStatus = String(agentsParsed.data.status);
-            const next = extractSection(agentsContent, "Single next action") || extractSection(agentsContent, "Single Next Action") || extractSection(agentsContent, "Next action");
-            nextClean = next ? next.replace(/\n+/g, " ") : "Not set.";
-            const blockers = extractSection(agentsContent, "Blockers & drift") || extractSection(agentsContent, "Blockers & Drift");
-            blockerClean = blockers && !/^(?:none|n\/a|not blocked)\.?$/i.test(blockers) ? blockers.replace(/\n+/g, " ") : "none";
-            if (agentsParsed.data.title && typeof agentsParsed.data.title === "string") {
-              objectiveTitle = ` ${agentsParsed.data.title}`;
-            }
-          }
+        const decisions = await listDecisions(root);
+        const recentDecisions = decisions.filter((d) => d.status === "accepted").slice(-INDEX_RECENT_DECISIONS).reverse();
+        if (content.includes("<!-- memory:generated:start decisions -->")) {
+          const lines = recentDecisions.map((d) => truncateLine(`- [${d.id}](/${DECISIONS_DIRECTORY}/${basename2(d.path)}) ${d.title}`));
+          content = replaceGeneratedRegion(content, "decisions", lines.join("\n") || "- none");
         }
-        const goalLink = activeScope === "." ? "/goal.md" : `/${activeScope}/agents.md`;
-        const scopeLink = activeScope === "." ? "/goal.md" : `/${activeScope}/agents.md`;
-        const scopeLabel = activeScope === "." ? "Project" : activeScope;
-        const activeText = `- Objective: [${objectiveId}](${goalLink})${objectiveTitle}
-- Active scope: [${scopeLabel}](${scopeLink})
-- State: ${goalStatus}
-- Next action: ${nextClean}
-- Blocker: ${blockerClean}`;
-        if (content.includes("<!-- memory:generated:start active -->")) {
-          content = replaceGeneratedRegion(content, "active", activeText);
-        } else if (content.includes("<!-- memory:generated:start focus -->")) {
-          content = replaceGeneratedRegion(content, "focus", activeText);
-        }
-        const sortedScopes = [...scopes];
-        const activeIdx = sortedScopes.indexOf(activeScope);
-        if (activeIdx > -1) {
-          sortedScopes.splice(activeIdx, 1);
-          sortedScopes.unshift(activeScope);
-        }
-        const visibleScopes = sortedScopes.slice(0, 5);
-        const remainingCount = sortedScopes.length - visibleScopes.length;
-        const scopeLines = [];
-        for (const trackedScope of visibleScopes) {
-          const docPath = trackedScope === "." ? join2(memoryRoot, "goal.md") : join2(scopeDirectory(root, trackedScope), "agents.md");
-          const metadata = await documentMetadata(docPath);
-          const target = trackedScope === "." ? "/goal.md" : `/${trackedScope}/agents.md`;
-          const label = trackedScope === "." ? "Project" : trackedScope;
-          const status = metadata.status ? `(${metadata.status})` : "";
-          const isActive = trackedScope === activeScope ? " \u2014 active" : "";
-          const desc = metadata.description && !metadata.description.startsWith("Goal for ") && !metadata.description.startsWith("Combined agent") ? ` \u2014 ${metadata.description}` : "";
-          scopeLines.push(`- [${label}](${target})${status ? ` ${status}` : ""}${isActive}${desc}`.replace(/\s+/g, " ").trim());
-        }
-        if (remainingCount > 0) {
-          scopeLines.push(`- ... (${remainingCount} more tracked scope(s))`);
+        if (content.includes("<!-- memory:generated:start recent -->")) {
+          const recent = (await readLogEntries(root, { limit: INDEX_RECENT_LOG_ENTRIES, excludeTypes: ["init"] })).map((entry) => truncateLine(`- ${entry.date} ${entry.type}: ${entry.title}${entry.scope === "." ? "" : ` (${entry.scope})`}`));
+          content = replaceGeneratedRegion(content, "recent", recent.join("\n") || "- none");
         }
         if (content.includes("<!-- memory:generated:start scopes -->")) {
-          content = replaceGeneratedRegion(content, "scopes", scopeLines.join("\n") || "- No tracked scopes.");
-        }
-        if (content.includes("<!-- memory:generated:start treemap -->")) {
-          content = replaceGeneratedRegion(content, "treemap", "");
-        }
-        if (content.includes("<!-- memory:generated:start documents -->")) {
-          content = replaceGeneratedRegion(
-            content,
-            "documents",
-            await generateDocumentsList(walk.files, memoryRoot, "/", "- No root documents.")
-          );
-        }
-        if (content.includes("<!-- memory:generated:start sources -->")) {
-          content = replaceGeneratedRegion(
-            content,
-            "sources",
-            await generateDocumentsList(walk.files, join2(memoryRoot, "sources"), "/sources/", "- No sources registered.")
-          );
+          const scoped = scopes.filter((s) => s !== ".");
+          const visible = scoped.slice(0, 5);
+          const lines = [];
+          for (const trackedScope of visible) {
+            const metadata = await documentMetadata(join2(scopeDirectory(root, trackedScope), "agents.md"));
+            lines.push(truncateLine(`- [${trackedScope}](/${trackedScope}/agents.md)${metadata.description ? ` \u2014 ${metadata.description}` : ""}`));
+          }
+          if (scoped.length > visible.length) lines.push(`- \u2026 ${scoped.length - visible.length} more: \`memory status\``);
+          content = replaceGeneratedRegion(content, "scopes", lines.join("\n") || "- Project root only.");
         }
         const rootUpdates = {};
         if (rootParsed.data.memory_version !== MEMORY_VERSION) rootUpdates.memory_version = MEMORY_VERSION;
@@ -8865,6 +8443,13 @@ async function syncIndexes(projectRoot, scan, options = {}) {
         }
         if (Object.keys(rootUpdates).length > 0) {
           content = updateMarkdownFrontmatter(content, rootUpdates);
+        }
+      } else if (directory === join2(memoryRoot, DECISIONS_DIRECTORY)) {
+        if (content.includes("<!-- memory:generated:start decisions -->")) {
+          const rows = (await listDecisions(root)).map((d) => `| [${d.id}](./${basename2(d.path)}) | ${d.status} | ${d.date ?? "-"} | ${d.title.replace(/\|/g, "/")} |`);
+          content = replaceGeneratedRegion(content, "decisions", `| ID | Status | Date | Decision |
+|---|---|---|---|${rows.length ? `
+${rows.join("\n")}` : ""}`);
         }
       } else if (isArchRoot) {
         const archLayers = ALL_ARCHITECTURE_LAYERS.filter(
@@ -9173,13 +8758,18 @@ function assertSafeEvent(event) {
     }
   }
 }
-function formatEvent(event) {
+function normalizeEventType(value) {
+  const raw = typeof value === "string" && value.trim() ? value : "note";
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "note";
+}
+function formatEvent(event, now = /* @__PURE__ */ new Date()) {
   assertSafeEvent(event);
-  const title = typeof event.title === "string" ? event.title : typeof event.type === "string" ? event.type : "Update";
-  const id = typeof event.id === "string" ? event.id : `evt-${(/* @__PURE__ */ new Date()).toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${randomUUID().slice(0, 6)}`;
-  const lines = [`### ${title} \u2014 \`${id}\``];
+  const type = normalizeEventType(event.type ?? event.category);
+  const title = typeof event.title === "string" && event.title.trim() ? event.title.trim() : typeof event.summary === "string" ? event.summary.trim().slice(0, 80) : titleFromPath(type);
+  const id = typeof event.id === "string" ? event.id : `evt-${now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${randomUUID().slice(0, 6)}`;
+  const lines = [`### ${title.replace(/\n/g, " ")} \u2014 \`${id}\``, `- **Type:** ${type}`];
   for (const [key, value] of Object.entries(event)) {
-    if (key === "title" || key === "type" || key === "id" || value === void 0 || value === null) continue;
+    if (["title", "type", "category", "id"].includes(key) || value === void 0 || value === null || value === "") continue;
     const label = key.replace(/[_-]+/g, " ").replace(/^./, (character) => character.toUpperCase());
     const rendered = Array.isArray(value) ? value.map(yamlScalar).join(", ") : yamlScalar(value);
     lines.push(`- **${label}:** ${rendered}`);
@@ -9188,7 +8778,7 @@ function formatEvent(event) {
 }
 function prependLogEntry(content, date, entry) {
   const dateHeading = `## ${date}`;
-  const headingIndex = content.indexOf(dateHeading);
+  const headingIndex = content.search(new RegExp(`^## ${date}\\s*$`, "m"));
   if (headingIndex >= 0) {
     const insertion = headingIndex + dateHeading.length;
     return `${content.slice(0, insertion)}
@@ -9216,7 +8806,7 @@ async function recordEvent(projectRoot, scope, event, options = {}) {
   const path = join2(scopeDirectory(projectRoot, safeScope), "log.md");
   const content = await readIfExists(path);
   if (!content) throw new Error(`Tracked scope does not contain log.md: ${scope}`);
-  const next = prependLogEntry(content, today(options.now), formatEvent(event));
+  const next = prependLogEntry(content, today(options.now), formatEvent(event, options.now));
   const change = await plannedWrite(path, next, options.dryRun ?? false, true);
   return { ...change, path: relativeChangePath(projectRoot, path) };
 }
@@ -9228,102 +8818,242 @@ function extractSection(content, heading) {
   const next = rest.search(/^#{2,3}\s+/m);
   return (next >= 0 ? rest.slice(0, next) : rest).trim();
 }
-async function readScopeDocuments(directory, isRoot) {
-  if (isRoot) {
-    const [goal2, progress2] = await Promise.all([
-      readIfExists(join2(directory, "goal.md")),
-      readIfExists(join2(directory, "progress.md"))
-    ]);
-    return { goal: goal2, progress: progress2 };
-  }
-  const agents = await readIfExists(join2(directory, "agents.md"));
-  if (agents) {
-    return { goal: agents, progress: agents, agents };
-  }
-  const [goal, progress] = await Promise.all([
-    readIfExists(join2(directory, "goal.md")),
-    readIfExists(join2(directory, "progress.md"))
-  ]);
-  return { goal, progress };
+function truncateLine(line, max = MAX_GENERATED_LINE_BYTES) {
+  if (Buffer.byteLength(line, "utf8") <= max) return line;
+  let out = line;
+  while (Buffer.byteLength(`${out}\u2026`, "utf8") > max) out = out.slice(0, -1);
+  return `${out}\u2026`;
 }
-async function checkCompletionReadiness(projectRoot, scope = ".", evidenceRoot = projectRoot) {
-  const root = resolve2(projectRoot);
-  const canonicalEvidenceRoot = await realpath2(evidenceRoot);
-  const safeScope = assertSafeRelativePath(scope);
-  const directory = scopeDirectory(root, safeScope);
-  const docs = await readScopeDocuments(directory, safeScope === ".");
-  if (!docs.goal || !docs.progress) {
-    return {
-      ready: false,
-      criteria: [],
-      verified: [],
-      missing: [safeScope === "." ? "Tracked scope is missing goal.md or progress.md" : "Tracked scope is missing agents.md"]
-    };
-  }
-  const goal = docs.goal;
-  const progress = docs.progress;
-  const criteria = [...new Set(extractSection(goal, "Acceptance criteria").match(/\bAC-\d{3}\b/g) ?? [])].sort();
-  const evidenceSection = extractSection(progress, "Acceptance evidence");
-  const verified = [];
-  const missing = [];
-  if (criteria.length === 0) missing.push("Goal has no stable acceptance criterion IDs (expected AC-001, AC-002, ...)");
-  for (const criterion of criteria) {
-    const row = evidenceSection.split("\n").find((line) => line.includes(`| ${criterion} |`) || line.includes(`|${criterion}|`));
-    if (!row) {
-      missing.push(`${criterion} has no evidence row`);
+function parseLogEntries(content, scope, archived = false) {
+  const entries = [];
+  let date = "";
+  let current;
+  const flush = () => {
+    if (current) {
+      current.body = current.body.trim();
+      entries.push(current);
+      current = void 0;
+    }
+  };
+  for (const line of content.split(/\r?\n/)) {
+    const dateMatch = /^##\s+(\d{4}-\d{2}-\d{2})\s*$/.exec(line);
+    if (dateMatch) {
+      flush();
+      date = dateMatch[1];
       continue;
     }
-    const cells = row.split("|").map((cell) => cell.trim()).filter(Boolean);
-    const status = cells[1] ?? "";
-    const evidence = cells.slice(2).join(" | ");
-    if (!/^(?:verified|passed|complete|done)$/i.test(status)) missing.push(`${criterion} status is not verified`);
-    else {
-      const references = [...evidence.matchAll(/repo:\/\/([^\s)`\]]+)/g)].flatMap((match) => {
-        try {
-          return [decodeURIComponent(match[1].split(/[?#]/, 1)[0])];
-        } catch {
-          return [];
-        }
-      });
-      let linkedEvidence = false;
-      for (const reference of references) {
-        try {
-          const path = resolve2(canonicalEvidenceRoot, assertSafeRelativePath(reference));
-          const canonical = await realpath2(path);
-          const info = await lstat2(path);
-          if (isPathInside(canonicalEvidenceRoot, canonical) && !isExcludedPath(reference) && info.isFile() && !info.isSymbolicLink()) linkedEvidence = true;
-        } catch {
-        }
-      }
-      if (!linkedEvidence) missing.push(`${criterion} has no existing repo:// evidence file`);
-      else verified.push(criterion);
+    const entryMatch = /^###\s+(.+?)(?:\s+[—–-]\s+`([^`]+)`)?\s*$/.exec(line);
+    if (entryMatch && date) {
+      flush();
+      current = { scope, date, type: "", title: entryMatch[1].trim(), id: entryMatch[2], body: "", archived };
+      continue;
+    }
+    if (!current) continue;
+    const typeMatch = /^-\s+\*\*Type:\*\*\s*(.+)$/.exec(line);
+    if (typeMatch && !current.type) current.type = normalizeEventType(typeMatch[1]);
+    else current.body += `${line}
+`;
+  }
+  flush();
+  for (const entry of entries) {
+    if (!entry.type) {
+      const legacy = /^([A-Za-z-]+)(?::|\s|$)/.exec(entry.title)?.[1] ?? "note";
+      entry.type = normalizeEventType(legacy);
     }
   }
-  return { ready: missing.length === 0, criteria, verified, missing };
+  return entries;
 }
-async function getMemoryStatus(projectRoot, scope) {
+async function readLogEntries(projectRoot, options = {}) {
   const root = resolve2(projectRoot);
+  const memoryRoot = bundlePath(root);
+  const scopes = options.scope ? [assertSafeRelativePath(options.scope)] : await discoverTrackedScopes(root);
+  const types = options.types?.map(normalizeEventType);
+  const excluded = new Set(options.excludeTypes?.map(normalizeEventType) ?? []);
+  const needle = options.query?.toLowerCase().trim();
+  const all = [];
+  for (const scope of scopes) {
+    const content = await readIfExists(join2(scopeDirectory(root, scope), "log.md"));
+    if (content) all.push(...parseLogEntries(content, scope));
+    if (options.includeArchive) {
+      const archiveDir = scope === "." ? join2(memoryRoot, "log") : join2(scopeDirectory(root, scope), "log");
+      const walk = await walkMemory(archiveDir);
+      for (const file of walk.files.sort().reverse()) all.push(...parseLogEntries(await readFile2(file, "utf8"), scope, true));
+    }
+  }
+  const filtered = all.filter((entry) => (!types || types.includes(entry.type)) && !excluded.has(entry.type) && (!options.since || entry.date >= options.since) && (!needle || `${entry.title}
+${entry.body}`.toLowerCase().includes(needle)));
+  const order = new Map(filtered.map((entry, index) => [entry, index]));
+  filtered.sort((a, b) => a.date === b.date ? order.get(a) - order.get(b) : b.date.localeCompare(a.date));
+  return typeof options.limit === "number" ? filtered.slice(0, Math.max(0, options.limit)) : filtered;
+}
+async function rotateLogs(projectRoot, options = {}) {
+  const root = resolve2(projectRoot);
+  const dryRun = options.dryRun ?? false;
+  const currentMonth = today(options.now).slice(0, 7);
+  const changes = [];
+  for (const scope of await discoverTrackedScopes(root)) {
+    const directory = scopeDirectory(root, scope);
+    const logPath = join2(directory, "log.md");
+    const content = await readIfExists(logPath);
+    if (!content) continue;
+    const firstDate = content.search(/^## \d{4}-\d{2}-\d{2}\s*$/m);
+    if (firstDate < 0) continue;
+    const header = content.slice(0, firstDate);
+    const sections = content.slice(firstDate).split(/^(?=## \d{4}-\d{2}-\d{2}\s*$)/m);
+    const keep = [];
+    const byMonth = /* @__PURE__ */ new Map();
+    for (const section of sections) {
+      const month = /^## (\d{4}-\d{2})/.exec(section)?.[1];
+      if (!month || month >= currentMonth) keep.push(section);
+      else byMonth.set(month, [...byMonth.get(month) ?? [], section]);
+    }
+    if (byMonth.size === 0) continue;
+    for (const [month, monthSections] of byMonth) {
+      const archivePath = join2(directory, "log", `${month}.md`);
+      await assertNoBundleParentSymlink(archivePath);
+      const existing = await readIfExists(archivePath);
+      const archiveHeader = `# ${titleFromPath(scope)} log ${month}
+
+> Archived by \`memory sync\`. Read via \`memory log --all\`.
+
+`;
+      const body = monthSections.map((s) => s.trimEnd()).join("\n\n");
+      const next = existing ? `${existing.trimEnd()}
+
+${body}
+` : `${archiveHeader}${body}
+`;
+      changes.push({ ...await plannedWrite(archivePath, next, dryRun, true), path: relativeChangePath(root, archivePath) });
+    }
+    const hot = `${header.trimEnd()}
+
+${keep.map((s) => s.trimEnd()).join("\n\n")}${keep.length ? "\n" : ""}`;
+    changes.push({ ...await plannedWrite(logPath, hot, dryRun, true), path: relativeChangePath(root, logPath) });
+  }
+  return changes;
+}
+function slugForDecision(title) {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "decision";
+}
+async function listDecisions(projectRoot) {
+  const dir = join2(bundlePath(resolve2(projectRoot)), DECISIONS_DIRECTORY);
+  let names;
+  try {
+    names = (await readdir2(dir)).filter((name) => DECISION_FILE_PATTERN.test(name)).sort();
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  const summaries = [];
+  for (const name of names) {
+    const path = join2(dir, name);
+    const parsed = parseMarkdown(await readFile2(path, "utf8"));
+    const id = typeof parsed.data.id === "string" ? parsed.data.id : name.slice(0, name.indexOf("-", 2));
+    summaries.push({
+      id,
+      title: typeof parsed.data.title === "string" ? parsed.data.title : name,
+      status: typeof parsed.data.status === "string" ? parsed.data.status : "accepted",
+      date: typeof parsed.data.date === "string" ? parsed.data.date : void 0,
+      description: typeof parsed.data.description === "string" ? parsed.data.description : void 0,
+      path: relativeChangePath(resolve2(projectRoot), path)
+    });
+  }
+  return summaries;
+}
+async function recordDecision(projectRoot, input, options = {}) {
+  const root = resolve2(projectRoot);
+  await assertWritableBundleVersion(root);
+  await assertValidForMutation(root);
+  if (!input.title?.trim()) throw new Error("Decision requires a title");
+  if (!input.decision?.trim()) throw new Error("Decision requires the decision text");
+  if (!input.approvalReason?.trim()) throw new Error("Decisions require explicit user approval (approvalReason)");
+  const payload = JSON.stringify(input);
+  if (containsLikelySecret(payload)) throw new Error("Refusing to write likely secret material to Project Memory");
+  const dryRun = options.dryRun ?? false;
+  const date = today(options.now);
+  const existing = await listDecisions(root);
+  const nextNumber = existing.reduce((max, d) => Math.max(max, Number(/D-(\d+)/.exec(d.id)?.[1] ?? 0)), 0) + 1;
+  const id = `D-${String(nextNumber).padStart(3, "0")}`;
+  const fileName = `${id}-${slugForDecision(input.title)}.md`;
+  const decisionsDir = join2(bundlePath(root), DECISIONS_DIRECTORY);
+  const path = join2(decisionsDir, fileName);
+  await assertNoBundleParentSymlink(path);
+  const superseded = input.supersedes ? existing.find((d) => d.id === input.supersedes) : void 0;
+  if (input.supersedes && !superseded) throw new Error(`Unknown decision to supersede: ${input.supersedes}`);
+  if (superseded && superseded.status !== "accepted") throw new Error(`${superseded.id} is already ${superseded.status}`);
+  const rejected = (input.rejected ?? []).filter((r) => r.trim());
+  const body = [
+    `# ${id}: ${input.title.trim()}`,
+    "",
+    "## Decision",
+    input.decision.trim(),
+    "",
+    "## Context",
+    input.context?.trim() || "- none recorded",
+    "",
+    "## Rejected",
+    rejected.length ? rejected.map((r) => `- ${r.trim()}`).join("\n") : "- none recorded",
+    "",
+    "## Consequences",
+    input.consequences?.trim() || "- none recorded",
+    ""
+  ].join("\n");
+  const frontmatter = {
+    type: "Decision",
+    id,
+    title: input.title.trim(),
+    description: input.decision.trim().split("\n")[0].slice(0, 160),
+    status: "accepted",
+    date,
+    approval: input.approvalReason.trim(),
+    timestamp: nowIso(options.now)
+  };
+  if (input.codeRefs?.length) frontmatter.code_refs = input.codeRefs;
+  if (superseded) frontmatter.supersedes = superseded.id;
+  const snapshot = dryRun ? void 0 : await captureBundle(root);
+  const changes = [];
+  try {
+    await mkdir(decisionsDir, { recursive: true });
+    if (await readIfExists(join2(decisionsDir, "index.md")) === void 0) {
+      changes.push({ ...await plannedWrite(join2(decisionsDir, "index.md"), decisionsIndexTemplate(), dryRun, false), path: relativeChangePath(root, join2(decisionsDir, "index.md")) });
+    }
+    changes.push({ ...await plannedWrite(path, serializeMarkdown(frontmatter, body), dryRun, false), path: relativeChangePath(root, path) });
+    if (superseded) {
+      const oldPath = resolve2(root, superseded.path);
+      const oldContent = await readFile2(oldPath, "utf8");
+      changes.push({ ...await plannedWrite(oldPath, updateMarkdownFrontmatter(oldContent, { status: "superseded", superseded_by: id }), dryRun, true), path: superseded.path });
+    }
+    if (!dryRun) {
+      changes.push(await recordEvent(root, options.scope ?? ".", {
+        type: "decision",
+        title: `${id} ${input.title.trim()}`,
+        decision: `[${id}](/${DECISIONS_DIRECTORY}/${fileName})`,
+        supersedes: superseded?.id,
+        approval: input.approvalReason.trim()
+      }, { now: options.now }));
+      changes.push(...await syncIndexes(root, void 0, { now: options.now }));
+    }
+  } catch (error) {
+    if (snapshot) await restoreBundle(root, snapshot);
+    throw error;
+  }
+  return {
+    decision: { id, title: input.title.trim(), status: "accepted", date, path: relativeChangePath(root, path), description: String(frontmatter.description) },
+    changes
+  };
+}
+async function getMemoryStatus(projectRoot) {
+  const root = resolve2(projectRoot);
+  const empty = { accepted: 0, superseded: 0, deprecated: 0 };
   const rootIndex = await readIfExists(join2(bundlePath(root), "index.md"));
   if (!rootIndex) {
     const validation = await validateBundle(root);
-    return { initialized: false, root, sourceCounts: {}, validation };
+    return { initialized: false, root, scopes: [], decisions: empty, recent: [], sourceCounts: {}, validation };
   }
   const rootParsed = parseMarkdown(rootIndex);
-  const activeScope = scope ? assertSafeRelativePath(scope) : typeof rootParsed.data.active_scope === "string" ? rootParsed.data.active_scope : ".";
-  const directory = scopeDirectory(root, activeScope);
-  let goalStatus;
-  let nextAction;
-  let blockers;
-  const docs = await readScopeDocuments(directory, activeScope === ".");
-  if (docs.agents) {
-    const parsed = parseMarkdown(docs.agents);
-    goalStatus = typeof parsed.data.status === "string" ? parsed.data.status : void 0;
-    nextAction = extractSection(docs.agents, "Single next action") || extractSection(docs.agents, "Single Next Action") || extractSection(docs.agents, "Next action") || void 0;
-    blockers = extractSection(docs.agents, "Blockers & drift") || extractSection(docs.agents, "Blockers & Drift") || extractSection(docs.agents, "Blockers and drift") || void 0;
-  } else {
-    goalStatus = docs.goal ? parseMarkdown(docs.goal).data.status : void 0;
-    nextAction = docs.progress ? extractSection(docs.progress, "Next action") : void 0;
-    blockers = docs.progress ? extractSection(docs.progress, "Blockers & drift") || extractSection(docs.progress, "Blockers and drift") : void 0;
+  const decisions = { ...empty };
+  for (const d of await listDecisions(root)) {
+    if (d.status in decisions) decisions[d.status]++;
   }
   const sourceCounts = {};
   const sourceWalk = await walkMemory(join2(bundlePath(root), "sources"));
@@ -9336,10 +9066,10 @@ async function getMemoryStatus(projectRoot, scope) {
   return {
     initialized: true,
     root,
-    activeScope,
-    goalStatus: typeof goalStatus === "string" ? goalStatus : void 0,
-    nextAction,
-    blockers,
+    version: typeof rootParsed.data.memory_version === "string" ? rootParsed.data.memory_version : void 0,
+    scopes: await discoverTrackedScopes(root),
+    decisions,
+    recent: await readLogEntries(root, { limit: 5 }),
     sourceCounts,
     validation: await validateBundle(root)
   };
@@ -9365,18 +9095,17 @@ async function exists(path) {
     return false;
   }
 }
+var MEMORY_CONTEXT_PREAMBLE = `[PROJECT MEMORY] Router below. Load on demand only; never read .memory/ in bulk.
+- Before editing a file: \`memory check --for-path <file>\` \u2192 open only the docs it lists. governance: hold \u2192 stop, ask user.
+- Before proposing a design: \`memory decisions\` \u2192 open only the relevant D-NNN file. Do not contradict accepted decisions silently.
+- Recent context: \`memory log --recent 10\` (filter: --type decision|fix|finding).
+- Anything else: \`memory search <keywords>\` \u2192 open the top hit only.
+- Changing decisions, conventions, scope rules, or architecture: present 2-3 options, mark one (Recommended), wait for explicit approval.
+- After meaningful work: \`memory log --add\` one concise entry (change|fix|finding|decision|correction).`;
 function formatMemoryContext(indexContent) {
-  return `[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)
-Persistent project truth is in .memory/. DO NOT load all memory files into context!
-Load ONLY the single relevant document required for your specific task:
-\u2022 Need next action: Read .memory/tasks.md (or active scope's agents.md).
-\u2022 Editing code: Run \`memory check --for-path <file>\` to discover the exact governing Flow/agents.md.
-\u2022 Domain logic: Read .memory/architecture/domain/Flow.md (enforce DDD business invariants).
-\u2022 Verify work: Read .memory/progress.md.
-\u2022 Search memory: Run \`memory search <keywords>\` for targeted snippets instead of reading entire files.
-Ask rather than guess; semantic changes require explicit user approval. Detailed memory is loaded strictly on demand.
+  return `${MEMORY_CONTEXT_PREAMBLE}
 
-ACTIVE INDEX
+INDEX
 ${indexContent}`;
 }
 function formatMemoryBudgetError(path, byteLength, budget) {
@@ -9418,8 +9147,7 @@ ${scopeIndex}`;
     const parsed = parseMarkdown(rootIndex);
     const toonObj = {
       project: parsed.data.project ?? parsed.data.title ?? "Project",
-      active_scope: parsed.data.active_scope ?? ".",
-      active_objective: parsed.data.active_objective ?? parsed.data.status ?? "in_progress",
+      memory_version: parsed.data.memory_version ?? null,
       index_bytes: indexBytes,
       budget,
       index: fullContent
@@ -9427,36 +9155,6 @@ ${scopeIndex}`;
     return JSON.stringify(toonObj, null, 2);
   }
   return formatMemoryContext(fullContent);
-}
-function validateGoalLikeFrontmatter(parsed, rel, docType, expectedScope, diagnostics) {
-  const status = parsed.data.status;
-  if (typeof status !== "string" || !GOAL_STATUSES.has(status)) {
-    diagnostics.push({ severity: "error", code: "goal-status", path: rel, message: `Invalid goal status: ${String(status)}` });
-  }
-  for (const field of ["title", "description", "timestamp", "scope"]) {
-    if (typeof parsed.data[field] !== "string") {
-      diagnostics.push({ severity: "error", code: "managed-field", path: rel, message: `${docType} requires '${field}'` });
-    }
-  }
-  if (parsed.data.scope !== expectedScope) {
-    diagnostics.push({ severity: "error", code: "scope-mismatch", path: rel, message: `${docType} scope must be '${expectedScope}'` });
-  }
-}
-function isMissingRequiredNextActionField(nextAction) {
-  const requiredNextActionFields = ["Action", "Requirement", "Likely files", "Verification", "Approval"];
-  return requiredNextActionFields.some((field) => {
-    const value = new RegExp(`\\*\\*${field}:\\*\\*\\s*([^\\n]+)`, "i").exec(nextAction)?.[1].trim();
-    return !value || /^(?:unknown|unresolved|none|pending|n\/a)\.?$/i.test(value);
-  });
-}
-function checkActiveTasksBudget(content, rel, diagnostics) {
-  const activeSection = extractAnySection(content, "Active tasks (Do Now)") || extractAnySection(content, "Active tasks");
-  if (activeSection) {
-    const taskLines = activeSection.split("\n").filter((l) => /^\s*(?:\d+\.|\*|-)\s*\[[ xX ]?\]/i.test(l) || /^\s*\d+\.\s+\*\*/.test(l));
-    if (taskLines.length > MAX_ACTIVE_TASKS) {
-      diagnostics.push({ severity: "error", code: "budget-active-tasks", path: rel, message: `Active tasks exceeds limit of ${MAX_ACTIVE_TASKS} items (${taskLines.length} tasks found)` });
-    }
-  }
 }
 var STOP_WORDS = /* @__PURE__ */ new Set([
   "a",
@@ -9650,7 +9348,6 @@ async function validateBundle(projectRoot, options) {
     return { ok: false, diagnostics, counts: { documents: 0, scopes: 0, sources: 0, errors: 1, warnings: 0 } };
   }
   const rootIndexPath = join2(memoryRoot, "index.md");
-  let declaredActiveScope;
   const rootIndex = await readIfExists(rootIndexPath);
   if (!rootIndex) diagnostics.push({ severity: "error", code: "missing-root-index", path: ".memory/index.md", message: "Root index.md is required" });
   else {
@@ -9661,8 +9358,6 @@ async function validateBundle(projectRoot, options) {
       if (parsed.data.architecture_mode !== "ddd") diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd" });
       if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
       if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
-      declaredActiveScope = typeof parsed.data.active_scope === "string" ? parsed.data.active_scope : void 0;
-      if (!declaredActiveScope) diagnostics.push({ severity: "error", code: "active-scope", path: ".memory/index.md", message: "Root index requires active_scope" });
     }
   }
   const archDir = join2(memoryRoot, "architecture");
@@ -9702,6 +9397,7 @@ async function validateBundle(projectRoot, options) {
   for (const path of walk.files) {
     const rel = normalizeSlash(relative2(root, path));
     const name = basename2(path);
+    if (isArchivedBundlePath(normalizeSlash(relative2(memoryRoot, path)))) continue;
     const content = await readFile2(path, "utf8");
     const byteLength = Buffer.byteLength(content, "utf8");
     for (const markerError of validateGeneratedMarkers(content)) diagnostics.push({ severity: "error", code: "markers", path: rel, message: markerError });
@@ -9832,52 +9528,36 @@ async function validateBundle(projectRoot, options) {
       }
     }
     const isSubfolder = dirname2(path) !== memoryRoot;
-    if (isSubfolder && ROOT_ONLY_FILES.has(name)) {
-      diagnostics.push({ severity: "error", code: "root-only-file", path: rel, message: `${name} is only allowed in root .memory/, not in subfolders` });
+    if (LEGACY_FILES.has(name)) {
+      diagnostics.push({ severity: "error", code: "legacy-file", path: rel, message: `${name} was removed in format ${MEMORY_VERSION}; run \`memory migrate\` to archive it` });
     }
-    if (name === "goal.md") {
-      if (byteLength > WARN_DOCUMENT_BYTES) {
-        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `goal.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
-      }
-      if (!isSubfolder) scopeDirectories.add(dirname2(path));
-      validateGoalLikeFrontmatter(parsed, rel, "Goal", scopeFromMemoryDirectory(memoryRoot, dirname2(path)), diagnostics);
-      if (parsed.data.status === "active") {
-        const progress = await readIfExists(join2(dirname2(path), "progress.md"));
-        const headingCount = progress?.match(/^##\s+Next action\s*$/gim)?.length ?? 0;
-        const nextAction = progress ? extractSection(progress, "Next action") : "";
-        if (headingCount !== 1 || !nextAction || isMissingRequiredNextActionField(nextAction)) {
-          diagnostics.push({ severity: "error", code: "next-action", path: rel, message: "Active goals require exactly one approved, evidence-linked Next action with Action, Requirement, Likely files, Verification, and Approval" });
-        }
-      }
-    }
-    if (name === "agents.md" && isSubfolder) {
+    if (name === "agents.md" && isSubfolder && !isReservedBundleDirectory(memoryRoot, dirname2(path))) {
       if (byteLength > WARN_DOCUMENT_BYTES) {
         diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `agents.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
       }
       scopeDirectories.add(dirname2(path));
-      validateGoalLikeFrontmatter(parsed, rel, "Agents", scopeFromMemoryDirectory(memoryRoot, dirname2(path)), diagnostics);
-      if (parsed.data.status === "active") {
-        const nextAction = extractAnySection(content, "Single next action") || extractAnySection(content, "Single Next Action") || extractAnySection(content, "Next action");
-        if (!nextAction || isMissingRequiredNextActionField(nextAction)) {
-          diagnostics.push({ severity: "error", code: "next-action", path: rel, message: "Active agents scope requires an approved, evidence-linked Single next action with Action, Requirement, Likely files, Verification, and Approval" });
-        }
-      }
-      checkActiveTasksBudget(content, rel, diagnostics);
-    }
-    if (parsed.data.type === "Progress" || name === "progress.md") {
-      if (byteLength > WARN_DOCUMENT_BYTES) {
-        diagnostics.push({ severity: "warning", code: "budget-document-size", path: rel, message: `progress.md exceeds ${WARN_DOCUMENT_BYTES} bytes recommended limit (${byteLength} bytes)` });
-      }
-    }
-    if (name === "tasks.md" || parsed.data.type === "Tasks") {
-      checkActiveTasksBudget(content, rel, diagnostics);
-    }
-    if (parsed.data.type === "Progress") {
-      for (const field of ["title", "description", "timestamp", "scope"]) {
-        if (typeof parsed.data[field] !== "string") diagnostics.push({ severity: "error", code: "managed-field", path: rel, message: `Progress requires '${field}'` });
-      }
       const expectedScope = scopeFromMemoryDirectory(memoryRoot, dirname2(path));
-      if (parsed.data.scope !== expectedScope) diagnostics.push({ severity: "error", code: "scope-mismatch", path: rel, message: `Progress scope must be '${expectedScope}'` });
+      if (parsed.data.scope !== expectedScope) diagnostics.push({ severity: "error", code: "scope-mismatch", path: rel, message: `Agents scope must be '${expectedScope}'` });
+      for (const field of ["title", "description"]) {
+        if (typeof parsed.data[field] !== "string") diagnostics.push({ severity: "error", code: "managed-field", path: rel, message: `Agents requires '${field}'` });
+      }
+    }
+    if (name === "log.md" && byteLength > WARN_LOG_BYTES) {
+      diagnostics.push({ severity: "warning", code: "budget-log-size", path: rel, message: `log.md exceeds ${WARN_LOG_BYTES} bytes; run \`memory sync\` to archive older months` });
+    }
+    if (parsed.data.type === "Decision") {
+      if (!DECISION_FILE_PATTERN.test(name) || dirname2(path) !== join2(memoryRoot, DECISIONS_DIRECTORY)) {
+        diagnostics.push({ severity: "error", code: "decision-path", path: rel, message: "Decision documents must live at decisions/D-NNN-slug.md" });
+      }
+      if (typeof parsed.data.id !== "string" || !name.startsWith(`${parsed.data.id}-`)) {
+        diagnostics.push({ severity: "error", code: "decision-id", path: rel, message: "Decision 'id' must match its D-NNN filename prefix" });
+      }
+      if (typeof parsed.data.status !== "string" || !DECISION_STATUSES.has(parsed.data.status)) {
+        diagnostics.push({ severity: "error", code: "decision-status", path: rel, message: `Invalid decision status: ${String(parsed.data.status)} (accepted | superseded | deprecated)` });
+      }
+      if (parsed.data.status === "superseded" && typeof parsed.data.superseded_by !== "string") {
+        diagnostics.push({ severity: "warning", code: "decision-superseded-by", path: rel, message: "Superseded decision should name superseded_by" });
+      }
     }
     if (parsed.data.type === "Source") {
       sourceCount++;
@@ -9927,7 +9607,8 @@ async function validateBundle(projectRoot, options) {
   }
   for (const filePath of walk.files) {
     const fileName = basename2(filePath);
-    if (fileName === "log.md" || isPathInside(join2(memoryRoot, "sources"), filePath) || ROOT_CORE_FILES.includes(fileName)) {
+    const relToBundle = normalizeSlash(relative2(memoryRoot, filePath));
+    if (fileName === "log.md" || relToBundle.startsWith(`${ARCHIVE_DIRECTORY}/`) || /(?:^|\/)log\/\d{4}-\d{2}\.md$/.test(relToBundle) || isPathInside(join2(memoryRoot, "sources"), filePath) || dirname2(filePath) === memoryRoot && ROOT_REQUIRED_FILES.includes(fileName)) {
       continue;
     }
     if (!reachable.has(filePath)) {
@@ -9940,27 +9621,15 @@ async function validateBundle(projectRoot, options) {
       });
     }
   }
-  if (declaredActiveScope) {
-    let safeActiveScope;
-    try {
-      safeActiveScope = assertSafeRelativePath(declaredActiveScope);
-    } catch {
-      diagnostics.push({ severity: "error", code: "active-scope", path: ".memory/index.md", message: `Unsafe active_scope: ${declaredActiveScope}` });
-    }
-    if (safeActiveScope) {
-      const activeDirectory = scopeDirectory(root, safeActiveScope);
-      if (!scopeDirectories.has(activeDirectory)) diagnostics.push({ severity: "error", code: "active-scope", path: ".memory/index.md", message: `active_scope is not tracked: ${declaredActiveScope}` });
-    }
+  for (const file of ROOT_REQUIRED_FILES) {
+    if (!await exists(join2(memoryRoot, file))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: ".memory", message: `Root memory is missing ${file}` });
+  }
+  for (const file of ROOT_RECOMMENDED_FILES) {
+    if (!await exists(join2(memoryRoot, file))) diagnostics.push({ severity: "warning", code: "missing-recommended", path: ".memory", message: `Root memory is missing ${file}; run \`memory migrate\`` });
   }
   for (const directory of scopeDirectories) {
-    if (directory === memoryRoot) {
-      for (const file of ROOT_CORE_FILES) {
-        if (!await exists(join2(directory, file))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative2(root, directory)), message: `Root memory is missing ${file}` });
-      }
-    } else {
-      for (const file of SCOPE_CORE_FILES) {
-        if (!await exists(join2(directory, file))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative2(root, directory)), message: `Tracked scope is missing ${file}` });
-      }
+    for (const file of SCOPE_CORE_FILES) {
+      if (!await exists(join2(directory, file))) diagnostics.push({ severity: "error", code: "incomplete-scope", path: normalizeSlash(relative2(root, directory)), message: `Tracked scope is missing ${file}` });
     }
   }
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
@@ -9974,156 +9643,33 @@ async function validateBundle(projectRoot, options) {
 var AGENTS_START = "<!-- memory:start -->";
 var AGENTS_END = "<!-- memory:end -->";
 var AGENTS_BLOCK = `${AGENTS_START}
-Project memory lives in \`.memory/\`. Keep all documents ultra-short, compact, concise, and token-efficient.
-Before any work in \`.memory/\`, check and read \`.memory/index.md\`, then route through System Flow (\`.memory/architecture/system-design/Flow.md\`) \u2192 relevant layer Flow \u2192 matching scope's goal and progress.
-Apply the mandatory DDD gate before implementation: declare bounded context, ubiquitous language, and business invariants in domain logic.
-Always keep \`index.md\`, relevant \`Flow.md\`, and \`AGENTS.md\` updated when project requirements, architecture, or scope change.
-Treat user-confirmed wants, must-not rules, and acceptance criteria as requirements.
-Ask instead of guessing when intent is missing, inferred, stale, or contradictory.
-When a source changes, integrate it into the existing wiki instead of merely indexing it.
-After meaningful work, record evidence, update progress and one next action, and append \`log.md\` using concise entries.
-Use \`memory_apply\` when available, otherwise the \`memory\` CLI, for generated regions; do not rewrite history.
+Project memory lives in \`.memory/\`. \`.memory/index.md\` is the router; open only the one file or command it points to for the current need.
+- Before editing a file: \`memory check --for-path <file>\`. If governance is \`hold\`, stop and ask.
+- Before proposing a design: \`memory decisions\`; never contradict an accepted decision without asking.
+- Changing decisions, conventions, scope rules, or architecture: offer 2-3 options, mark one (Recommended), wait for explicit approval.
+- After meaningful work: \`memory log --add\` one concise entry. Never rewrite history.
+- Write memory only through \`memory_apply\` or the \`memory\` CLI.
 ${AGENTS_END}`;
-var extractAnySection = extractSection;
-function migrateLegacyScopeToAgents(scope, timestamp2, goalContent, progressContent, tasksContent, existingAgents) {
-  if (existingAgents) return existingAgents;
-  const title = titleFromPath(scope);
-  const goalParsed = goalContent ? parseMarkdown(goalContent) : void 0;
-  const status = typeof goalParsed?.data.status === "string" ? goalParsed.data.status : "draft";
-  const provenance = typeof goalParsed?.data.provenance === "string" ? goalParsed.data.provenance : "observed";
-  const motivation = goalContent ? extractAnySection(goalContent, "Motivation") || "" : "";
-  const reqs = goalContent ? extractAnySection(goalContent, "Requirements") || "" : "";
-  const ac = goalContent ? extractAnySection(goalContent, "Acceptance criteria") || "" : "";
-  const nonGoals = goalContent ? extractAnySection(goalContent, "Scope & non-goals") || extractAnySection(goalContent, "Scope and non-goals") || "" : "";
-  const constraints = goalContent ? extractAnySection(goalContent, "Constraints & dependencies") || extractAnySection(goalContent, "Constraints and dependencies") || "" : "";
-  const archSummary = goalContent ? extractAnySection(goalContent, "Scope Architecture") || extractAnySection(goalContent, "Auto-Detected Architecture") || "" : "";
-  const currentState = progressContent ? extractAnySection(progressContent, "Current state") || "" : "";
-  const blockers = progressContent ? extractAnySection(progressContent, "Blockers & drift") || extractAnySection(progressContent, "Blockers and drift") || "" : "";
-  const evidence = progressContent ? extractAnySection(progressContent, "Acceptance evidence") || "" : "";
-  const nextAction = (progressContent ? extractAnySection(progressContent, "Next action") : "") || (tasksContent ? extractAnySection(tasksContent, "Single next action") : "");
-  const activeTasks = tasksContent ? extractAnySection(tasksContent, "Active tasks (Do Now)") || extractAnySection(tasksContent, "Active tasks") || "" : "";
-  const backlog = tasksContent ? extractAnySection(tasksContent, "Backlog (Do Later)") || extractAnySection(tasksContent, "Backlog") || "" : "";
-  const completedTasks = tasksContent ? extractAnySection(tasksContent, "Completed tasks summary") || extractAnySection(tasksContent, "Completed tasks") || "" : "";
-  let body = `# ${title} Agents
+function isArchivedBundlePath(relToBundle) {
+  return relToBundle.startsWith(`${ARCHIVE_DIRECTORY}/`) || /(?:^|\/)log\/\d{4}-\d{2}\.md$/.test(relToBundle);
+}
+var LEGACY_AGENTS_SECTIONS = ["Goal & Requirements", "Current State & Progress", "Tasks & Action Items"];
+function hasLegacyAgentsSections(content) {
+  return LEGACY_AGENTS_SECTIONS.some((heading) => new RegExp(`^##\\s+${heading.replace(/[&]/g, "\\&")}\\s*$`, "m").test(content));
+}
+function rebuildLegacyAgents(scope, content, timestamp2) {
+  const parsed = parseMarkdown(content);
+  const summary = extractSection(content, "Scope Architecture & Summary").replace(/^###\s+/gm, "- ").trim();
+  const rebuilt = parseMarkdown(buildScopeAgentsContent(scope, timestamp2));
+  const body = rebuilt.body.replace(/## Map\n[\s\S]*?\n\n## Rules/, `## Map
+${summary || `- Code root: \`${scope}/\``}
 
-> Combined instructions, architecture summary, goal requirements, progress, and tasks for \`${scope}\`.
-
-`;
-  body += `## Scope Architecture & Summary
-
-${archSummary || `Auto-migrated scope for \`${scope}\`.`}
-
-`;
-  body += `## Goal & Requirements
-
-`;
-  if (motivation) body += `### Motivation
-
-${motivation}
-
-`;
-  if (nonGoals) body += `### Scope & non-goals
-
-${nonGoals}
-
-`;
-  if (reqs) body += `### Requirements
-
-${reqs}
-
-`;
-  body += `### Acceptance criteria
-
-${ac || "Use stable IDs in the `AC-NNN` form. Each criterion must be independently verifiable."}
-
-`;
-  if (constraints) body += `### Constraints & dependencies
-
-${constraints}
-
-`;
-  body += `## Current State & Progress
-
-`;
-  body += `### Current state
-
-${currentState || "Active development."}
-
-`;
-  body += `### Blockers & drift
-
-${blockers || "none"}
-
-`;
-  body += `### Acceptance evidence
-
-${evidence || "| Criterion | Status | Evidence |\n|---|---|---|"}
-
-`;
-  body += `## Tasks & Action Items
-
-`;
-  if (nextAction) {
-    body += `### Single next action
-
-${nextAction.includes("- **Action:**") ? nextAction : `- **Action:** ${nextAction}
-- **File / Command:** Edit \`.memory/${scope}/agents.md\`
-- **Time estimate:** [15 min]
-- **Requirement:** Migrated
-- **Likely files:** \`${scope}/\`
-- **Verification:** User review
-- **Approval:** approved`}
-
-`;
-  } else {
-    body += `### Single next action
-
-- **Action:** Continue scope execution.
-- **File / Command:** Edit \`.memory/${scope}/agents.md\`
-- **Time estimate:** [15 min]
-- **Requirement:** Migrated
-- **Likely files:** \`${scope}/\`
-- **Verification:** User review
-- **Approval:** approved
-
-`;
+## Rules`);
+  const data = { ...rebuilt.data };
+  for (const key of ["code_refs", "governance", "governance_reason", "tags", "uid"]) {
+    if (parsed.data[key] !== void 0) data[key] = parsed.data[key];
   }
-  if (activeTasks) {
-    body += `### Active tasks (Do Now)
-> [!NOTE]
-> Maximum 5 active items. Numbered single-bounded steps only.
-
-${activeTasks}
-
-`;
-  } else {
-    body += `### Active tasks (Do Now)
-> [!NOTE]
-> Maximum 5 active items. Numbered single-bounded steps only.
-
-1. [ ] **Scope review** \`[15 min]\` (REQ-001) \u2014 Review migrated scope items
-
-`;
-  }
-  if (backlog) body += `### Backlog (Do Later)
-
-${backlog}
-
-`;
-  if (completedTasks) body += `### Completed tasks summary
-
-${completedTasks}
-`;
-  return serializeMarkdown({
-    type: "Agents",
-    title: `${title} agents`,
-    description: `Combined agent instructions, goal, progress, and tasks for ${scope}.`,
-    timestamp: timestamp2,
-    scope,
-    status,
-    provenance,
-    uid: randomUUID()
-  }, body);
+  return serializeMarkdown(data, body);
 }
 async function migrateBundle(projectRoot, options = {}) {
   const root = resolve2(projectRoot);
@@ -10138,178 +9684,134 @@ async function migrateBundle(projectRoot, options = {}) {
   if (!initialParsed.hasFrontmatter || initialParsed.errors.length > 0) {
     throw new Error("Root index has invalid frontmatter; repair it before migration");
   }
+  const version = initialParsed.data.memory_version;
+  if (typeof version !== "string" || version !== MEMORY_VERSION && !LEGACY_VERSIONS.has(version)) {
+    throw new Error(`Unsupported memory_version for migration: ${String(version)}`);
+  }
   const walk = await walkMemory(memoryRoot);
-  const legacySubfolderFiles = walk.files.filter((file) => {
+  if (walk.diagnostics.some((d) => d.code === "symlink")) throw new Error("Refusing to migrate a bundle containing symbolic links");
+  const legacyArchiveRoot = join2(memoryRoot, ARCHIVE_DIRECTORY, "legacy");
+  const toArchive = [];
+  const rebuiltAgents = /* @__PURE__ */ new Map();
+  for (const file of walk.files) {
+    const relToBundle = normalizeSlash(relative2(memoryRoot, file));
+    if (isArchivedBundlePath(relToBundle)) continue;
     const dir = dirname2(file);
-    if (dir === memoryRoot || isPathInside(join2(memoryRoot, "architecture"), dir) || isPathInside(join2(memoryRoot, "sources"), dir)) return false;
-    const base = basename2(file);
-    return ROOT_ONLY_FILES.has(base) || base === "index.md";
-  });
-  const is02 = initialParsed.data.memory_version === "0.2";
-  if (is02 && legacySubfolderFiles.length === 0) {
-    const val = await validateBundle(root);
-    return { root, version: "0.2", changes: [], validation: val };
+    const name = basename2(file);
+    if (LEGACY_FILES.has(name)) toArchive.push(file);
+    else if (name === "index.md" && dir !== memoryRoot && !isReservedBundleDirectory(memoryRoot, dir)) toArchive.push(file);
+    else if (name === "agents.md" && dir !== memoryRoot && !isReservedBundleDirectory(memoryRoot, dir)) {
+      const content = await readFile2(file, "utf8");
+      if (hasLegacyAgentsSections(content)) {
+        toArchive.push(file);
+        rebuiltAgents.set(file, rebuildLegacyAgents(scopeFromMemoryDirectory(memoryRoot, dir), content, timestamp2));
+      }
+    }
+  }
+  const rootIsLegacy = version !== MEMORY_VERSION;
+  if (rootIsLegacy) toArchive.push(rootIndexPath);
+  const needsConventions = await readIfExists(join2(memoryRoot, "conventions.md")) === void 0;
+  const needsDecisions = await readIfExists(join2(memoryRoot, DECISIONS_DIRECTORY, "index.md")) === void 0;
+  if (!rootIsLegacy && toArchive.length === 0 && !needsConventions && !needsDecisions) {
+    return { root, version: MEMORY_VERSION, changes: [], archived: [], validation: await validateBundle(root) };
   }
   const snapshot = dryRun ? void 0 : await captureBundle(root);
   const changes = [];
+  const archived = [];
   try {
     const scan = await scanRepository(root);
     const deepScan = await deepScanRepository(root, scan);
     const discovery = discoverArchitectureLayers(scan, deepScan);
+    for (const file of toArchive) {
+      const relToBundle = normalizeSlash(relative2(memoryRoot, file));
+      const target = join2(legacyArchiveRoot, ...relToBundle.split("/"));
+      await assertNoBundleParentSymlink(target);
+      const content = await readFile2(file, "utf8");
+      const existingArchive = await readIfExists(target);
+      if (existingArchive !== void 0 && existingArchive !== content) {
+        throw new Error(`Archive already contains a different ${relative2(root, target)}; resolve manually before migrating`);
+      }
+      changes.push({ ...await plannedWrite(target, content, dryRun, false), path: relativeChangePath(root, target) });
+      archived.push(relativeChangePath(root, file));
+      if (file === rootIndexPath || rebuiltAgents.has(file)) continue;
+      if (!dryRun) await rm(file, { force: true });
+      changes.push({ path: relativeChangePath(root, file), action: "update" });
+    }
+    for (const [file, content] of rebuiltAgents) {
+      changes.push({ ...await plannedWrite(file, content, dryRun, true), path: relativeChangePath(root, file) });
+    }
+    const legacyScopeDirs = new Set(toArchive.map(dirname2).filter((dir) => dir !== memoryRoot && !isReservedBundleDirectory(memoryRoot, dir)));
+    for (const dir of legacyScopeDirs) {
+      const hadScopeDocs = toArchive.some((f) => dirname2(f) === dir && LEGACY_FILES.has(basename2(f)));
+      if (!hadScopeDocs) continue;
+      const scope = scopeFromMemoryDirectory(memoryRoot, dir);
+      const agentsPath = join2(dir, "agents.md");
+      if (await readIfExists(agentsPath) === void 0) {
+        changes.push({ ...await plannedWrite(agentsPath, buildScopeAgentsContent(scope, timestamp2, deepScan), dryRun, false), path: relativeChangePath(root, agentsPath) });
+      }
+      const logPath = join2(dir, "log.md");
+      if (await readIfExists(logPath) === void 0) {
+        changes.push({ ...await plannedWrite(logPath, logTemplate(scope, date), dryRun, false), path: relativeChangePath(root, logPath) });
+      }
+    }
     const archDir = join2(memoryRoot, "architecture");
     const archIndexPath = join2(archDir, "index.md");
     if (await readIfExists(archIndexPath) === void 0) {
-      const archIndexContent = architectureIndexTemplate(discovery.detectedLayers, timestamp2);
-      const change = await plannedWrite(archIndexPath, archIndexContent, dryRun, false);
-      changes.push({ ...change, path: relativeChangePath(root, archIndexPath) });
+      changes.push({ ...await plannedWrite(archIndexPath, architectureIndexTemplate(discovery.detectedLayers, timestamp2), dryRun, false), path: relativeChangePath(root, archIndexPath) });
     }
-    for (const layer of discovery.detectedLayers) {
+    for (const layer of [.../* @__PURE__ */ new Set([...MANDATORY_ARCHITECTURE_LAYERS, ...discovery.detectedLayers])]) {
       const flowPath = join2(archDir, layer, "Flow.md");
       if (await readIfExists(flowPath) === void 0) {
-        const evidence = discovery.layers.get(layer);
-        const content = flowTemplate(layer, evidence, scan.fingerprint, timestamp2);
-        const change = await plannedWrite(flowPath, content, dryRun, false);
-        changes.push({ ...change, path: relativeChangePath(root, flowPath) });
+        changes.push({ ...await plannedWrite(flowPath, flowTemplate(layer, discovery.layers.get(layer), scan.fingerprint, timestamp2), dryRun, false), path: relativeChangePath(root, flowPath) });
       }
     }
-    const subfolderDirs = /* @__PURE__ */ new Set();
-    for (const file of walk.files) {
-      const dir = dirname2(file);
-      if (dir === memoryRoot || isPathInside(join2(memoryRoot, "architecture"), dir) || isPathInside(join2(memoryRoot, "sources"), dir)) continue;
-      subfolderDirs.add(dir);
+    if (needsConventions) {
+      const path = join2(memoryRoot, "conventions.md");
+      changes.push({ ...await plannedWrite(path, conventionsTemplate(timestamp2, deepScan), dryRun, false), path: relativeChangePath(root, path) });
     }
-    for (const subDir of subfolderDirs) {
-      const scope = scopeFromMemoryDirectory(memoryRoot, subDir);
-      const legacyGoal = join2(subDir, "goal.md");
-      const legacyProgress = join2(subDir, "progress.md");
-      const legacyTasks = join2(subDir, "tasks.md");
-      const legacyIndex = join2(subDir, "index.md");
-      const agentsPath = join2(subDir, "agents.md");
-      const logPath = join2(subDir, "log.md");
-      const [goalContent, progressContent, tasksContent, existingAgents, existingLog] = await Promise.all([
-        readIfExists(legacyGoal),
-        readIfExists(legacyProgress),
-        readIfExists(legacyTasks),
-        readIfExists(agentsPath),
-        readIfExists(logPath)
-      ]);
-      const hasLegacy = goalContent !== void 0 || progressContent !== void 0 || tasksContent !== void 0 || await readIfExists(legacyIndex) !== void 0;
-      if (hasLegacy || existingAgents === void 0 && existingLog !== void 0) {
-        const agentsContent = migrateLegacyScopeToAgents(
-          scope,
-          timestamp2,
-          goalContent,
-          progressContent,
-          tasksContent,
-          existingAgents
-        );
-        const agentsChange2 = await plannedWrite(agentsPath, agentsContent, dryRun, Boolean(existingAgents));
-        changes.push({ ...agentsChange2, path: relativeChangePath(root, agentsPath) });
-        let logContent = existingLog ?? logTemplate(scope, date);
-        logContent = prependLogEntry(
-          logContent,
-          today(date),
-          `### Migration: Scope Restructure
-- **Update:** Migrated legacy subfolder files (goal.md, progress.md, tasks.md) into unified \`agents.md\`.
-- **Evidence:** Automated \`memory migrate\` data shift.
-`
-        );
-        const logChange = await plannedWrite(logPath, logContent, dryRun, Boolean(existingLog));
-        changes.push({ ...logChange, path: relativeChangePath(root, logPath) });
-        for (const legacyFile of [legacyGoal, legacyProgress, legacyTasks, legacyIndex]) {
-          if (await readIfExists(legacyFile) !== void 0) {
-            if (!dryRun) await rm(legacyFile, { force: true });
-            changes.push({ path: relativeChangePath(root, legacyFile), action: "update" });
-          }
-        }
-      }
-      for (const prefix of allDirectoryPrefixes(scope)) {
-        if (prefix === scope) continue;
-        const prefixIndex = join2(safeBundleFile(root, prefix), "index.md");
-        if (await readIfExists(prefixIndex) !== void 0) {
-          if (!dryRun) await rm(prefixIndex, { force: true });
-          changes.push({ path: relativeChangePath(root, prefixIndex), action: "update" });
-        }
-      }
+    if (needsDecisions) {
+      const path = join2(memoryRoot, DECISIONS_DIRECTORY, "index.md");
+      changes.push({ ...await plannedWrite(path, decisionsIndexTemplate(), dryRun, false), path: relativeChangePath(root, path) });
     }
-    let updatedRootIndex = rootIndexContent;
-    updatedRootIndex = updateMarkdownFrontmatter(updatedRootIndex, {
-      memory_version: "0.2",
-      architecture_mode: "ddd",
-      architecture_index: "/architecture/",
-      system_flow: "/architecture/system-design/Flow.md",
-      repository_head: scan.head ?? null,
-      repository_fingerprint: scan.fingerprint,
-      last_scan_at: timestamp2,
-      timestamp: timestamp2
-    });
-    const routeOrder = ["frontend", "gateway-edge", "auth", "backend", "domain", "database"];
-    const activeRoute = routeOrder.filter((l) => discovery.detectedLayers.includes(l)).map((l) => titleFromPath(l)).join(" \u2192 ") || "Domain";
-    if (!updatedRootIndex.includes("## Architecture")) {
-      const archSection = `
-## Architecture
-- Start: [System flow](/architecture/system-design/Flow.md)
-- Domain: [Context map](/architecture/domain/Flow.md)
-- Security: [Trust flow](/architecture/security/Flow.md)
-- Route: ${activeRoute}
-- Full map: [Architecture index](/architecture/)
-`;
-      if (updatedRootIndex.includes("## Find")) {
-        updatedRootIndex = updatedRootIndex.replace("## Find", `${archSection}
-## Find`);
-      } else if (updatedRootIndex.includes("## Map")) {
-        updatedRootIndex = updatedRootIndex.replace("## Map", `${archSection}
-## Find
-| Need | Read |
-|---|---|
-| Approved intent | goal.md |
-| Current work/evidence | progress.md |
-| Next actions | tasks.md |
-| Code/data route | architecture/.../Flow.md |
-| Decisions/history | log.md |
-| Provenance | sources/ |
-| Full repository tree | \`memory map\` |
-`);
-      } else if (updatedRootIndex.includes("## Scopes")) {
-        updatedRootIndex = updatedRootIndex.replace("## Scopes", `${archSection}
-## Scopes`);
-      } else {
-        updatedRootIndex += archSection;
-      }
+    if (await readIfExists(join2(memoryRoot, "log.md")) === void 0) {
+      const path = join2(memoryRoot, "log.md");
+      changes.push({ ...await plannedWrite(path, logTemplate(".", date), dryRun, false), path: relativeChangePath(root, path) });
     }
-    const rootChange = await plannedWrite(rootIndexPath, updatedRootIndex, dryRun, true);
-    changes.push({ ...rootChange, path: relativeChangePath(root, rootIndexPath) });
-    const syncChanges = await syncIndexes(root, scan, { dryRun, now: date });
-    changes.push(...syncChanges);
-    const agentsChange = await syncAgentsFile(root, { dryRun });
-    changes.push(agentsChange);
-    const validation = dryRun ? { ok: true, diagnostics: [], counts: { documents: 0, scopes: 0, sources: 0, errors: 0, warnings: 0 } } : await validateBundle(root);
+    if (await readIfExists(join2(memoryRoot, "sources", "index.md")) === void 0) {
+      const path = join2(memoryRoot, "sources", "index.md");
+      changes.push({ ...await plannedWrite(path, indexTemplate("Sources"), dryRun, false), path: relativeChangePath(root, path) });
+    }
+    if (rootIsLegacy) {
+      const projectName = typeof initialParsed.data.project === "string" ? initialParsed.data.project : basename2(root);
+      const nextIndex = rootIndexTemplate(projectName, timestamp2, scan.head, deepScan, scan.fingerprint);
+      changes.push({ ...await plannedWrite(rootIndexPath, nextIndex, dryRun, true), path: relativeChangePath(root, rootIndexPath) });
+    }
+    if (dryRun) {
+      return {
+        root,
+        version: MEMORY_VERSION,
+        changes,
+        archived,
+        validation: { ok: true, diagnostics: [], counts: { documents: 0, scopes: 0, sources: 0, errors: 0, warnings: 0 } }
+      };
+    }
+    changes.push(await recordEvent(root, ".", {
+      type: "migration",
+      title: `Migrated memory ${version} \u2192 ${MEMORY_VERSION}`,
+      summary: "Removed goal/progress/tasks tracking; added conventions.md and decisions/.",
+      archived: archived.length ? `${archived.length} file(s) \u2192 .memory/${ARCHIVE_DIRECTORY}/legacy/` : "none"
+    }, { now: date }));
+    changes.push(await syncAgentsFile(root));
+    changes.push(...await syncIndexes(root, await scanRepository(root), { now: date }));
+    const validation = await validateBundle(root);
     if (!validation.ok) {
       throw new Error(`Migration produced invalid bundle: ${validation.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.path ?? "bundle"}: ${d.message}`).join("; ")}`);
     }
-    return {
-      root,
-      version: "0.2",
-      changes,
-      validation
-    };
+    return { root, version: MEMORY_VERSION, changes, archived, validation };
   } catch (error) {
     if (snapshot) await restoreBundle(root, snapshot);
     throw error;
   }
-}
-async function readUnmanagedAgentsContent(projectRoot) {
-  const path = resolve2(projectRoot, "AGENTS.md");
-  const content = await readIfExists(path);
-  if (!content) return void 0;
-  let unmanaged = content;
-  const starts = unmanaged.indexOf(AGENTS_START);
-  const ends = unmanaged.indexOf(AGENTS_END);
-  if (starts !== -1 && ends !== -1 && ends > starts) {
-    unmanaged = unmanaged.slice(0, starts) + unmanaged.slice(ends + AGENTS_END.length);
-  }
-  unmanaged = unmanaged.trim();
-  return unmanaged.length > 0 ? unmanaged : void 0;
 }
 async function syncAgentsFile(projectRoot, options = {}) {
   const path = resolve2(projectRoot, "AGENTS.md");
@@ -10370,28 +9872,16 @@ async function restoreBundle(projectRoot, snapshot) {
   for (const [path, content] of snapshot) await atomicWrite(path, content);
 }
 function operationRequiresApproval(operation) {
-  if (operation.semantic || (operation.path ? basename2(operation.path) === "goal.md" || basename2(operation.path) === "agents.md" : false)) return true;
-  if (["write_document", "update_frontmatter"].includes(operation.action)) {
+  if (operation.semantic) return true;
+  if (operation.action === "append_log") {
+    return SEMANTIC_EVENT_TYPES.has(normalizeEventType(operation.event?.type ?? operation.event?.category));
+  }
+  if (operation.action === "write_document" || operation.action === "update_frontmatter") {
     const path = operation.path?.replace(/\\/g, "/").replace(/^\.\//, "") ?? "";
-    if (path === "progress.md" || path.endsWith("/progress.md")) return false;
     if (path.startsWith("sources/")) return operation.action === "write_document";
     return true;
   }
-  if (operation.action !== "append_log") return false;
-  const eventType = String(operation.event?.type ?? operation.event?.category ?? "").toLowerCase();
-  return ["completion", "contradiction-resolution", "correction", "decision", "preference", "reversal", "scope"].includes(eventType);
-}
-async function validateGoalStatusTransition(projectRoot, target, previousStatus, nextStatus, evidenceRoot) {
-  if (typeof previousStatus === "string" && typeof nextStatus === "string") {
-    if (previousStatus !== nextStatus && !GOAL_TRANSITIONS[previousStatus]?.has(nextStatus)) {
-      throw new Error(`Invalid goal lifecycle transition: ${previousStatus} -> ${nextStatus}`);
-    }
-    if (nextStatus === "complete" && previousStatus !== "complete") {
-      const scope = scopeFromMemoryDirectory(bundlePath(projectRoot), dirname2(target));
-      const readiness = await checkCompletionReadiness(projectRoot, scope, evidenceRoot);
-      if (!readiness.ready) throw new Error(`Completion evidence is incomplete: ${readiness.missing.join("; ")}`);
-    }
-  }
+  return false;
 }
 async function applyMemoryPlan(projectRoot, plan, options = {}) {
   if (!plan || !Array.isArray(plan.operations) || plan.operations.length === 0) throw new Error("Memory plan requires at least one operation");
@@ -10403,7 +9893,7 @@ async function applyMemoryPlan(projectRoot, plan, options = {}) {
     const stagingRoot = await mkdtemp(join2(tmpdir(), "project-memory-dry-run-"));
     try {
       await cp(bundlePath(projectRoot), bundlePath(stagingRoot), { recursive: true, verbatimSymlinks: true });
-      return await applyMemoryPlan(stagingRoot, plan, { dryRun: false, scan: options.scan, evidenceRoot: options.evidenceRoot ?? projectRoot });
+      return await applyMemoryPlan(stagingRoot, plan, { dryRun: false, scan: options.scan });
     } finally {
       await rm(stagingRoot, { recursive: true, force: true });
     }
@@ -10430,6 +9920,7 @@ async function applyMemoryPlan(projectRoot, plan, options = {}) {
       }
       if (!operation.path) throw new Error(`${operation.action} requires path`);
       const target = safeBundleFile(projectRoot, operation.path);
+      if (isArchivedBundlePath(normalizeSlash(relative2(bundlePath(projectRoot), target)))) throw new Error("Archived memory is read-only");
       await assertExpectedHash(target, operation.expectedHash);
       const existing = await readIfExists(target);
       if (operation.action === "write_document") {
@@ -10447,11 +9938,7 @@ async function applyMemoryPlan(projectRoot, plan, options = {}) {
             if (parsed.data[field] !== previous.data[field]) throw new Error(`Source record '${field}' is immutable`);
           }
         }
-        const isGoalDoc = basename2(target) === "goal.md" || basename2(target) === "agents.md";
-        if (isGoalDoc && parsed.data.status === "complete") throw new Error("Complete goals with update_frontmatter so approved criteria cannot be replaced");
-        if (isGoalDoc && existing && typeof parsed.data.status === "string") {
-          await validateGoalStatusTransition(projectRoot, target, parseMarkdown(existing).data.status, parsed.data.status, options.evidenceRoot);
-        }
+        if (LEGACY_FILES.has(basename2(target))) throw new Error(`${basename2(target)} is not part of format ${MEMORY_VERSION}`);
         const change = await plannedWrite(target, operation.content.endsWith("\n") ? operation.content : `${operation.content}
 `, options.dryRun ?? false, true);
         changes.push({ ...change, path: relativeChangePath(projectRoot, target) });
@@ -10464,10 +9951,6 @@ async function applyMemoryPlan(projectRoot, plan, options = {}) {
           for (const field of ["type", "resource", "source_hash", "registered_at", "uid"]) {
             if (field in operation.values && operation.values[field] !== existingParsed.data[field]) throw new Error(`Source record '${field}' is immutable`);
           }
-        }
-        const isGoalDoc = basename2(target) === "goal.md" || basename2(target) === "agents.md";
-        if (isGoalDoc && typeof operation.values.status === "string") {
-          await validateGoalStatusTransition(projectRoot, target, existingParsed.data.status, operation.values.status, options.evidenceRoot);
         }
         const managedValues = { ...operation.values, timestamp: nowIso() };
         if (existingParsed.data.type === "Source" && operation.values.integration_status === "integrated" && managedValues.integrated_at === void 0) {
@@ -10541,10 +10024,12 @@ async function checkPathGovernance(projectRoot, targetPath) {
   const constraints = [];
   for (const filePath of walk.files) {
     const relFile = normalizeSlash(relative2(root, filePath));
+    if (isArchivedBundlePath(normalizeSlash(relative2(memoryRoot, filePath)))) continue;
     const content = await readFile2(filePath, "utf8");
     const parsed = parseMarkdown(content);
     const data = parsed.data;
-    let isGoverning = false;
+    if (data.type === "Decision" && data.status !== "accepted") continue;
+    let isGoverning = filePath === join2(memoryRoot, "conventions.md");
     const codeRefs = Array.isArray(data.code_refs) ? data.code_refs.filter((r) => typeof r === "string") : [];
     for (const ref of codeRefs) {
       if (matchesGlobPattern(ref, relTarget)) {
@@ -10560,7 +10045,7 @@ async function checkPathGovernance(projectRoot, targetPath) {
         }
       }
     }
-    if (!isGoverning && basename2(filePath) === "agents.md" && dirname2(filePath) !== memoryRoot) {
+    if (!isGoverning && basename2(filePath) === "agents.md" && dirname2(filePath) !== memoryRoot && !isReservedBundleDirectory(memoryRoot, dirname2(filePath))) {
       const scope = scopeFromMemoryDirectory(memoryRoot, dirname2(filePath));
       if (relTarget === scope || relTarget.startsWith(`${scope}/`)) {
         isGoverning = true;
@@ -10592,13 +10077,13 @@ async function checkPathGovernance(projectRoot, targetPath) {
       }
     }
   }
+  const conventionsRel = normalizeSlash(relative2(root, join2(memoryRoot, "conventions.md")));
+  const specific = governingDocuments.filter((d) => d.path !== conventionsRel);
   let overallGovernance = "untracked";
   if (holds.length > 0) {
     overallGovernance = "hold";
-  } else if (governingDocuments.length > 0) {
-    const hasActive = governingDocuments.some((d) => d.governance === "active" || !d.governance);
-    const allDeprecated = governingDocuments.every((d) => d.governance === "deprecated");
-    overallGovernance = allDeprecated ? "deprecated" : hasActive ? "active" : "active";
+  } else if (specific.length > 0) {
+    overallGovernance = specific.every((d) => d.governance === "deprecated") ? "deprecated" : "active";
   }
   return {
     targetPath: relTarget,
@@ -10716,48 +10201,33 @@ var HELP = `Project Memory CLI
 Usage:
   memory <command> [options]
 
-  Commands:
-  scan                 Inspect repository files and propose tracked scopes
-  init                 Create .memory and optional tracked scopes (deep scan by default)
-  scaffold             Add one or more tracked scopes
-  migrate              Safely upgrade legacy Project Memory bundles to 0.2
-  sync                 Detect changed sources and refresh generated indexes
-  status               Show goal, source freshness, blockers, and next action
-  search               Lexical BM25 search across all .memory documents
-  check                Inspect governance holds, constraints, and scope for a code path
-  context              Emit the exact context agents should receive
-  map                  Generate on-demand codebase treemap & architecture layout
-  record               Register a source and/or append a history event
-  validate             Validate format, links, lifecycle, and freshness
-  agents-sync          Add or repair the managed AGENTS.md block
+Read (cheap, targeted):
+  status               Scopes, decision counts, recent activity, validation
+  check <path>         Governing docs, holds, and MUST/NEVER rules for a code path
+  decisions            List decisions (id, status, title) without opening files
+  log                  Show recent log entries (--recent N, --type, --since, --query, --all)
+  search <query>       BM25 search across .memory; returns ranked snippets
+  context              Emit the exact context injected into agents
+  map                  On-demand codebase treemap
+
+Write (validated, atomic):
+  log --add            Append a log entry (--type, --title, --summary, --files, --scope)
+  decide               Record a decision (--title, --decision, --context, --rejected,
+                       --consequences, --code-ref, --supersedes, --approval)
+  record               Register a source and/or append a raw event (--event)
   apply                Apply a structured memory plan
+  sync                 Refresh fingerprints/indexes, archive old log months
+  init | scaffold      Create .memory or add tracked scopes (deep scan by default)
+  migrate              Upgrade 0.1/0.2 bundles to 0.3 (archives goal/progress/tasks)
+  validate             Validate format, links, budgets, drift
+  agents-sync          Add or repair the managed AGENTS.md block
+  scan                 Inspect repository files and propose tracked scopes
 
 Common options:
-  --root <path>         Project root (default: current directory/Git root)
-  --scope <path>        Tracked scope; repeat for multiple scopes
-  --for-path <path>     Target repository file path for check command
-  --query <text>        Search query keywords (optional; positional query supported)
-  --limit <number>      Maximum search results to return (default: 10)
-  --drift               Check description and semantic drift during validate
-  --strict              Elevate broken links and orphans to errors during validate
-  --budget <bytes>      Byte budget for context command (default: 6000)
-  --deep                Perform deep codebase ingestion scan during init (default)
-  --shallow             Perform skeleton init without deep codebase scan
-  --source <path|url>   Approved source; repeat for multiple sources
-  --source-text <text>  Approved brief or conversation text (not stored raw)
-  --source-text-file <path> Read approved text from a file
-  --source-name <name>  Stable name for a text source
-  --source-kind <kind>  conversation, brief, or input
-  --event <json>        History event object
-  --event-file <path>   Read a history event JSON object from a file
-  --plan <json>         Structured memory plan for apply
-  --plan-file <path>    Read a structured memory plan from a file
-  --dry-run             Show changes without writing
-  --check               Check whether sync would change files
-  --fetch-remote        Refresh URL sources during sync
-  --toon                Emit compact Token-Oriented Object Notation (TOON) for AI agents
-  --json                Emit JSON
-  --help                Show this help
+  --root <path>  --scope <path>  --json  --toon  --dry-run  --help
+  --limit <n> / --recent <n>  --type <t> (repeatable)  --since YYYY-MM-DD  --query <text>
+  --all (include archived log months)  --drift  --strict  --check  --fetch-remote
+  --shallow  --budget <bytes>  --source <path|url>  --source-text[-file]  --plan[-file]  --event[-file]
 `;
 function parseArguments(argv) {
   const { values: flags2, positionals } = parseArgs({
@@ -10773,6 +10243,22 @@ function parseArguments(argv) {
       strict: { type: "boolean" },
       budget: { type: "string" },
       deep: { type: "boolean" },
+      shallow: { type: "boolean" },
+      add: { type: "boolean" },
+      all: { type: "boolean" },
+      recent: { type: "string" },
+      type: { type: "string", multiple: true },
+      since: { type: "string" },
+      title: { type: "string" },
+      summary: { type: "string" },
+      files: { type: "string", multiple: true },
+      decision: { type: "string" },
+      context: { type: "string" },
+      rejected: { type: "string", multiple: true },
+      consequences: { type: "string" },
+      "code-ref": { type: "string", multiple: true },
+      supersedes: { type: "string" },
+      approval: { type: "string" },
       source: { type: "string", multiple: true },
       "source-text": { type: "string" },
       "source-text-file": { type: "string" },
@@ -10804,6 +10290,14 @@ function formatToon(value) {
       const lines = items.map((item) => `  ${item.score.toFixed(2)}|${item.relPath}|${item.title}|${item.snippet.replace(/\n/g, " ")}`);
       return `search_results[score|path|title|snippet]:
 ${lines.join("\n")}`;
+    }
+    if (isLogEntryList(value)) {
+      return `log[date|scope|type|title]:
+${value.map((e) => `  ${e.date}|${e.scope}|${e.type}|${e.title}`).join("\n")}`;
+    }
+    if (isDecisionList(value)) {
+      return `decisions[id|status|date|title]:
+${value.map((d) => `  ${d.id}|${d.status}|${d.date ?? "-"}|${d.title}`).join("\n")}`;
     }
   }
   if (typeof value !== "object") return String(value);
@@ -10850,16 +10344,14 @@ candidates[path|confidence|files]:
 ${rows.join("\n")}`;
   }
   if ("initialized" in object && "sourceCounts" in object) {
-    const sc = object.sourceCounts ?? {};
-    const countsStr = Object.entries(sc).map(([k, v]) => `${k}:${v}`).join(" ");
-    const val = object.validation;
-    const valStr = val ? `ok:${val.ok}(err:${val.counts?.errors ?? 0},warn:${val.counts?.warnings ?? 0})` : "none";
+    const status = object;
+    const sc = Object.entries(status.sourceCounts ?? {}).map(([k, v]) => `${k}:${v}`).join(" ") || "none";
+    const val = status.validation;
     const lines = [
-      `init:${object.initialized}|root:${object.root}${object.activeScope ? `|scope:${object.activeScope}` : ""}`,
-      `goal:${object.goalStatus ?? "none"}${object.nextAction ? `|next:${object.nextAction}` : ""}`,
-      `sources:${countsStr}|val:${valStr}`
+      `init:${status.initialized}|version:${status.version ?? "none"}|scopes:${status.scopes.length}`,
+      `decisions:accepted:${status.decisions.accepted} superseded:${status.decisions.superseded}|sources:${sc}|val:ok:${val.ok}(err:${val.counts.errors},warn:${val.counts.warnings})`
     ];
-    if (object.blockers) lines.push(`blockers:${object.blockers}`);
+    if (status.recent.length) lines.push(formatToon(status.recent));
     return lines.join("\n");
   }
   if ("changes" in object && Array.isArray(object.changes)) {
@@ -10875,10 +10367,24 @@ ${object.treemap}`;
   }
   return Object.entries(object).map(([k, v]) => v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`).join(" | ");
 }
+function isLogEntryList(value) {
+  return typeof value[0] === "object" && value[0] !== null && "date" in value[0] && "archived" in value[0];
+}
+function isDecisionList(value) {
+  return typeof value[0] === "object" && value[0] !== null && "id" in value[0] && "status" in value[0] && "path" in value[0];
+}
+function summarizeLog(entries) {
+  return entries.map((e) => {
+    const detail = e.body.split("\n").filter((l) => /^-\s+\*\*(Summary|Files|Decision|Why|Evidence):\*\*/.test(l)).map((l) => `    ${l.trim()}`);
+    return [`- ${e.date} [${e.type}] ${e.title}${e.scope === "." ? "" : ` (${e.scope})`}${e.archived ? " (archived)" : ""}`, ...detail].join("\n");
+  }).join("\n");
+}
 function summarize(value) {
   if (value === null || value === void 0) return "";
   if (Array.isArray(value)) {
     if (value.length === 0) return "No results found.";
+    if (isLogEntryList(value)) return summarizeLog(value);
+    if (isDecisionList(value)) return value.map((d) => `- ${d.id} [${d.status}] ${d.title} \u2192 ${d.path}`).join("\n");
     if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
       const items = value;
       const lines = [`Found ${items.length} matching document(s):`];
@@ -10921,6 +10427,23 @@ function summarize(value) {
     if (diagnostics.length > 30) lines.push(`- ${diagnostics.length - 30} more diagnostic(s)`);
     return lines.join("\n");
   }
+  if ("initialized" in object && "sourceCounts" in object) {
+    const status = object;
+    if (!status.initialized) return "Project Memory is not initialized. Run `memory init`.";
+    const lines = [
+      `Memory ${status.version ?? "?"} \xB7 ${status.scopes.length} scope(s) \xB7 decisions: ${status.decisions.accepted} accepted, ${status.decisions.superseded} superseded`,
+      `Validation: ${status.validation.ok ? "ok" : "invalid"} (${status.validation.counts.errors} error(s), ${status.validation.counts.warnings} warning(s))`
+    ];
+    if (status.recent.length) lines.push("Recent:", summarizeLog(status.recent));
+    return lines.join("\n");
+  }
+  if ("decision" in object && "changes" in object) {
+    const d = object.decision;
+    return `Recorded ${d.id}: ${d.title} \u2192 ${d.path}`;
+  }
+  if ("path" in object && "action" in object && Object.keys(object).every((k) => ["path", "action", "beforeHash", "afterHash"].includes(k))) {
+    return `${object.action}: ${object.path}`;
+  }
   if ("candidates" in object && "files" in object) {
     const candidates = object.candidates;
     return [
@@ -10935,6 +10458,9 @@ function summarize(value) {
     return changes.length === 0 ? "No changes." : changes.map((change) => `- ${change.action}: ${change.path}`).join("\n");
   }
   return JSON.stringify(value, null, 2);
+}
+function operationRequiresApprovalForEvent(event) {
+  return SEMANTIC_EVENT_TYPES.has(String(event.type ?? "").toLowerCase());
 }
 async function rootFor(args) {
   return findProjectRoot(resolve3(flag(args, "root") ?? process.cwd()));
@@ -10999,7 +10525,8 @@ async function runCli(argv, io = {
         const knownScopes = scopes.length > 0 ? scopes : await discoverTrackedScopes(root);
         const mutate = async () => {
           const sources = await refreshRegisteredSources(root, { dryRun, fetchRemote: enabled(args, "fetch-remote") });
-          const changes = await syncIndexes(root, scan, { dryRun });
+          const rotated = await rotateLogs(root, { dryRun });
+          const changes = [...rotated, ...await syncIndexes(root, scan, { dryRun })];
           const agents = await syncAgentsFile(root, { dryRun });
           const validation = await validateBundle(root);
           return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes: [...changes, agents], validation };
@@ -11008,7 +10535,7 @@ async function runCli(argv, io = {
         break;
       }
       case "status": {
-        result = await getMemoryStatus(root, flag(args, "scope") ?? args.positional[0]);
+        result = await getMemoryStatus(root);
         break;
       }
       case "context": {
@@ -11083,6 +10610,70 @@ async function runCli(argv, io = {
         const limit = limitStr ? parseInt(limitStr, 10) : 10;
         const scope = flag(args, "scope");
         result = await searchMemory(root, query, { limit, scope });
+        break;
+      }
+      case "log": {
+        const scope = flag(args, "scope");
+        if (enabled(args, "add")) {
+          const title = flag(args, "title") ?? args.positional.join(" ");
+          if (!title.trim()) throw new Error("log --add requires --title <text>");
+          const types = flags(args, "type");
+          const event = {
+            type: types[0] ?? "note",
+            title,
+            summary: flag(args, "summary"),
+            files: flags(args, "files").length ? flags(args, "files") : void 0,
+            approval: flag(args, "approval")
+          };
+          if (operationRequiresApprovalForEvent(event) && !flag(args, "approval")?.trim()) {
+            throw new Error(`Log type '${event.type}' changes project meaning; pass --approval "<user's approval>" after asking the user`);
+          }
+          const mutate = () => recordEvent(root, scope ?? ".", event, { dryRun });
+          result = dryRun ? await mutate() : await withBundleLock(root, async () => {
+            const change = await mutate();
+            await syncIndexes(root);
+            return change;
+          });
+          break;
+        }
+        const limitStr = flag(args, "recent") ?? flag(args, "limit");
+        const limit = limitStr ? Number.parseInt(limitStr, 10) : 10;
+        if (!Number.isFinite(limit) || limit < 0) throw new Error("--recent/--limit must be a non-negative integer");
+        const since = flag(args, "since");
+        if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error("--since must be YYYY-MM-DD");
+        result = await readLogEntries(root, {
+          scope,
+          limit,
+          types: flags(args, "type").length ? flags(args, "type") : void 0,
+          since,
+          query: flag(args, "query") ?? (args.positional.join(" ") || void 0),
+          includeArchive: enabled(args, "all")
+        });
+        break;
+      }
+      case "decisions": {
+        const all = await listDecisions(root);
+        const types = flags(args, "type");
+        result = enabled(args, "all") ? all : all.filter((d) => types.length ? types.includes(d.status) : d.status === "accepted");
+        break;
+      }
+      case "decide": {
+        const title = flag(args, "title");
+        const decision = flag(args, "decision");
+        const approvalReason = flag(args, "approval");
+        if (!title || !decision) throw new Error("decide requires --title and --decision");
+        if (!approvalReason?.trim()) throw new Error(`decide requires --approval "<user's approval>"; ask the user first`);
+        const mutate = () => recordDecision(root, {
+          title,
+          decision,
+          context: flag(args, "context"),
+          rejected: flags(args, "rejected"),
+          consequences: flag(args, "consequences"),
+          codeRefs: flags(args, "code-ref"),
+          supersedes: flag(args, "supersedes"),
+          approvalReason
+        }, { dryRun, scope: flag(args, "scope") });
+        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
         break;
       }
       case "check": {

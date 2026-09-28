@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -147,7 +147,7 @@ governance_reason: "Security audit in progress - frozen until compliance review"
   // Check untracked path
   const untrackedGov = await checkPathGovernance(root, "scripts/random.py");
   assert.equal(untrackedGov.governance, "untracked");
-  assert.equal(untrackedGov.governingDocuments.length, 0);
+  assert.deepEqual(untrackedGov.governingDocuments.map((d) => d.path), [".memory/conventions.md"], "only global conventions apply");
 });
 
 test("validateBundle validates trust_tier, generated, verified, and code_refs metadata", async (t) => {

@@ -1,17 +1,17 @@
 # Initialize Project Memory
 
-Create the persistent `.memory/` wiki and conduct project or feature goal interviews.
+Create `.memory/` from a codebase scan, then fill it with observed facts only.
 
-1. Activate the `project-memory` skill and read its initialization and interview rules.
-2. If `.memory/` is not initialized:
-   - Run `memory scan --json`. If initializing a mature or mid-project codebase, use `memory init --deep` (or `/mem-ingest` / `/memory-ingest`) to execute a comprehensive scan of manifests, schemas, API routes, and entry points.
-   - Show proposed tracked scopes and ask the user which feature scopes to track.
-   - Run `memory init [--deep]` with approved `--scope` parameters. `AGENTS.md` is created or ingested automatically.
-3. Conduct the interactive **Grill-Me style** (one question at a time, interactive UI, recommended defaults) multi-round (3–4 stage minimum) interview:
-   - **Grill-Me Rules:** Ask questions ONE AT A TIME using interactive UI selection tools (`memory_ask` or `ask_question`). Provide a recommended option prefixed with `(Recommended)`. Walk down each branch of the design tree sequentially.
-   - **Mandatory Round 1 Questions:**
-     1. Is this a **new standalone feature** or an **add-on feature** to an existing system?
-     2. Should a **new folder/scope directory** be created for this, or use an **existing folder**?
-     3. What specific **design patterns** (e.g. Repository, Factory, Strategy, MVC, CQRS, Clean Architecture) and repository structure should be used before implementing?
-   - **Round 2 & 3+:** Ask 5–10 follow-up clarifying questions based on answers, followed by final refinement questions until 100% crystal clear. Save answers incrementally with `memory_apply`.
-4. Run `memory validate` and ensure all documents remain ultra-short, compact, and token-efficient.
+1. Load the `project-memory` skill.
+2. Run `memory scan --json`. Show the candidate scopes and ask which to track (2-3 options, one marked (Recommended)).
+3. Run `memory init --scope <path>` for each approved scope (or `memory init` for the project root only).
+4. Read `.memory/index.md`, then `.memory/conventions.md`. From manifests, CI config, and READMEs, fill in:
+   - Commands: exact build, test, and lint commands.
+   - Rules: only rules the code or docs actually enforce (`MUST:` / `NEVER:` prefixes).
+   - Pitfalls: known traps.
+5. For each tracked scope, open only its `agents.md` and fill in Purpose (1 line) and Map.
+6. Ask the user about anything you could not confirm: max 5 questions, 2-3 options each, one (Recommended).
+7. Write through `memory apply` (rules need `approved: true` and the user's approval reason). Log one summary with `memory log --add --type note --title "Initialized memory"`.
+8. Run `memory validate`.
+
+Do not invent goals, tasks, or requirements.

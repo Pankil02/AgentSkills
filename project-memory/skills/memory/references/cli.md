@@ -1,4 +1,4 @@
-# CLI JSON contracts for format 0.2
+# CLI JSON contracts for format 0.3
 
 Run commands with `--json` for machine-readable output. JSON is written to stdout on success. Errors are written to stderr as `{"error":"message"}` with exit code 1. Usage errors use exit code 2. `validate` uses exit code 1 when the bundle is structurally invalid.
 
@@ -104,7 +104,7 @@ Emits the exact token-optimized context injected into AI agents at session start
 
 ```json
 {
-  "context": "[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)...",
+  "context": "[PROJECT MEMORY] Router below. Load on demand only; …",
   "scope": ".",
   "budget": 6000
 }
@@ -116,16 +116,42 @@ Emits the exact token-optimized context injected into AI agents at session start
 {
   "initialized": true,
   "root": "/absolute/project",
-  "activeScope": ".",
-  "goalStatus": "active",
-  "nextAction": "Markdown section text",
-  "blockers": "Markdown section text",
+  "version": "0.3",
+  "scopes": [".", "apps/api"],
+  "decisions": { "accepted": 3, "superseded": 1, "deprecated": 0 },
+  "recent": ["Log entry objects (max 5)"],
   "sourceCounts": { "integrated": 2, "changed": 1 },
   "validation": "Validation result"
 }
 ```
 
-Optional fields are omitted when the bundle or scope does not provide them.
+## `log`
+
+Read (default): `--recent N` (default 10), `--type <t>` (repeatable), `--since YYYY-MM-DD`, `--query <text>`, `--scope <path>`, `--all` (include `log/YYYY-MM.md` archives).
+
+```json
+[{ "scope": ".", "date": "2026-09-27", "type": "fix", "title": "Fixed race", "id": "evt-…", "body": "- **Summary:** …", "archived": false }]
+```
+
+Write: `--add --type <t> --title <text> [--summary <text>] [--files <path>…] [--scope <path>] [--approval <reason>]`. Semantic types (`decision`, `correction`, `reversal`, `scope`, `preference`, `contradiction-resolution`) require `--approval`. Returns one common change.
+
+## `decisions`
+
+Lists `accepted` decisions; `--all` or `--type superseded` for others.
+
+```json
+[{ "id": "D-001", "title": "Use Zod", "status": "accepted", "date": "2026-09-27", "path": ".memory/decisions/D-001-use-zod.md", "description": "…" }]
+```
+
+## `decide`
+
+Required: `--title`, `--decision`, `--approval`. Optional: `--context`, `--rejected "<option>: <flaw>"` (repeatable), `--consequences`, `--code-ref <glob>` (repeatable), `--supersedes D-NNN`, `--scope`.
+
+```json
+{ "decision": { "id": "D-002", "title": "…", "status": "accepted", "path": ".memory/decisions/D-002-….md" }, "changes": ["Common change objects"] }
+```
+
+Superseding marks the old decision `superseded` with `superseded_by`. A decision log entry is appended and indexes are refreshed.
 
 ## `record`
 
@@ -159,7 +185,7 @@ Optional fields are omitted when the bundle or scope does not provide them.
 }
 ```
 
-When `--fetch-remote` is absent, URL sources retain their current fingerprint and are not fetched.
+`sync` also moves log day-sections older than the current month into `log/YYYY-MM.md` (appears in `changes`). When `--fetch-remote` is absent, URL sources retain their current fingerprint and are not fetched.
 
 ## `validate`
 
@@ -204,7 +230,7 @@ Input is passed through `--plan <json>` or `--plan-file <path>`:
 }
 ```
 
-Goal writes and non-operational document writes are classified as semantic by the core even when `semantic` is omitted. Progress updates, valid source-record updates, and generated index updates may remain objective. Plans cannot create source records or alter their identity and fingerprint fields. Completion uses `update_frontmatter` and requires an existing repository evidence file with `repo://path`.
+`write_document` and `update_frontmatter` are semantic (need `approved: true` + `approvalReason`) except for source-record frontmatter updates. `append_log` is semantic only for semantic event types. `replace_generated` and `sync_indexes` are never semantic. Plans cannot create source records, alter their identity fields, write `index.md`/`log.md` directly, recreate `goal.md`/`progress.md`/`tasks.md`, or modify `archive/`. Every plan is validated and rolled back atomically on failure.
 
 Output:
 
@@ -217,12 +243,13 @@ Output:
 
 ## `migrate`
 
-Safely upgrades a legacy 0.1 Project Memory bundle to the 0.2 architecture lenses and DDD model format with automatic rollback on error.
+Upgrades 0.1/0.2 bundles to 0.3. Idempotent, rolls back on error.
 
 ```json
 {
   "root": "/absolute/project",
-  "version": "0.2",
+  "version": "0.3",
+  "archived": [".memory/goal.md", ".memory/tasks.md"],
   "changes": ["Common change objects"],
   "validation": "Validation result object"
 }

@@ -48,7 +48,7 @@ test("Pi extension registers exact tools, commands, and lifecycle hooks", () => 
   assert.deepEqual(commands.sort(), [
     "memory-ingest",
     "memory-init",
-    "memory-reflect",
+    "memory-log",
     "memory-sync",
   ]);
   assert(events.includes("before_agent_start"));
@@ -119,7 +119,7 @@ test("memory_apply requires Pi UI confirmation", async (t) => {
   const result = await applyTool.execute("apply", {
     action: "apply_plan",
     plan: {
-      operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "interviewing" } }],
+      operations: [{ action: "update_frontmatter", path: "conventions.md", values: { description: "Approved conventions summary." } }],
     },
   }, undefined, undefined, {
     cwd: project,
@@ -201,8 +201,8 @@ test("Antigravity plugin manifest, hooks, rule, skill, and importable workflows 
   const skill = await readFile(join(root, "skills", "memory", "SKILL.md"), "utf8");
   assert.match(skill, /^---\nname: project-memory\ndescription:/);
   assert.match(await readFile(join(root, "rules", "memory.md"), "utf8"), /Project Memory rule/);
-  for (const name of ["init", "sync", "reflect"]) {
-    assert.match(await readFile(join(root, "workflows", `memory-${name}.md`), "utf8"), /^# /);
+  for (const name of ["init", "ingest", "sync", "log"]) {
+    assert.match(await readFile(join(root, "workflows", `mem-${name}.md`), "utf8"), /^# /);
   }
 });
 
@@ -217,24 +217,23 @@ test("Kilo plugin injects active memory and a one-shot edit reminder", async (t)
   const first = { system: [] as string[] };
   await transform({}, first);
   assert.equal(first.system.length, 1);
-  assert.match(first.system[0], /ACTIVE INDEX/);
-  assert.doesNotMatch(first.system[0], /ACTIVE GOAL/);
-  assert.doesNotMatch(first.system[0], /ACTIVE PROGRESS/);
+  assert.match(first.system[0], /\nINDEX\n/);
+  assert.doesNotMatch(first.system[0], /Repository changed/);
   assert(Buffer.byteLength(first.system[0], "utf8") <= 6_000);
 
   await hooks.event({ event: { type: "file.edited", properties: { file: join(project, "src", "feature.ts") } } });
   const reminded = { system: [] as string[] };
   await transform({}, reminded);
-  assert.match(reminded.system[0], /PROJECT MEMORY MAINTENANCE/);
+  assert.match(reminded.system[0], /Repository changed/);
   assert.match(reminded.system[0], /src\/feature\.ts/);
   const consumed = { system: [] as string[] };
   await transform({}, consumed);
-  assert.doesNotMatch(consumed.system[0], /PROJECT MEMORY MAINTENANCE/);
+  assert.doesNotMatch(consumed.system[0], /Repository changed/);
 
-  await hooks.event({ event: { type: "file.watcher.updated", properties: { file: join(project, ".memory", "progress.md") } } });
+  await hooks.event({ event: { type: "file.watcher.updated", properties: { file: join(project, ".memory", "log.md") } } });
   const ignored = { system: [] as string[] };
   await transform({}, ignored);
-  assert.doesNotMatch(ignored.system[0], /PROJECT MEMORY MAINTENANCE/);
+  assert.doesNotMatch(ignored.system[0], /Repository changed/);
 });
 
 test("Kilo installer copies the skill, plugin, and commands without overwriting them", async (t) => {
@@ -248,8 +247,8 @@ test("Kilo installer copies the skill, plugin, and commands without overwriting 
   const plugin = await readFile(join(project, ".kilo", "plugin", "project-memory.ts"), "utf8");
   assert.match(plugin, /id: "project-memory"/);
   assert.match(plugin, /experimental\.chat\.system\.transform/);
-  for (const name of ["init", "sync", "reflect"]) {
-    assert.match(await readFile(join(project, ".kilo", "command", `memory-${name}.md`), "utf8"), /^# /);
+  for (const name of ["init", "ingest", "sync", "log"]) {
+    assert.match(await readFile(join(project, ".kilo", "command", `mem-${name}.md`), "utf8"), /^# /);
   }
   await assert.rejects(execFileAsync(process.execPath, [installer, project]));
 });
@@ -291,43 +290,23 @@ test("package metadata exposes the exact package, CLI, Pi extension, and skill",
   assert.equal(packageJson.engines.node, ">=20");
 });
 
-test("All adapters (Pi, Kilo, Antigravity, buildMemoryContext) emit byte-identical bounded context regardless of oversized goal and progress", async (t) => {
+test("All adapters (Pi, Kilo, Antigravity, buildMemoryContext) emit byte-identical bounded context regardless of oversized documents", async (t) => {
   const project = await mkdtemp(join(tmpdir(), "project-memory-parity-"));
   t.after(() => rm(project, { recursive: true, force: true }));
   await initializeBundle(project);
 
-  // Inflate goal, progress, and log with large content
-  await writeFile(join(project, ".memory", "goal.md"), `---
-type: Goal
-title: Huge Goal
-description: Oversized goal description
-status: active
-timestamp: 2026-01-01T00:00:00Z
-scope: .
----
-# Goal
-${"Long goal content that should not be auto-injected\\n".repeat(1000)}
-`);
-
-  await writeFile(join(project, ".memory", "progress.md"), `---
-type: Progress
-title: Huge Progress
-description: Oversized progress description
-timestamp: 2026-01-01T00:00:00Z
-scope: .
----
-# Progress
-${"Long progress content that should not be auto-injected\\n".repeat(1000)}
-`);
+  // Inflate conventions and log with large content
+  const conventionsPath = join(project, ".memory", "conventions.md");
+  await writeFile(conventionsPath, `${await readFile(conventionsPath, "utf8")}\n${"Long conventions content that should not be auto-injected\n".repeat(1000)}`);
 
   await writeFile(join(project, ".memory", "log.md"), `# Log\n${"Long log entry\n".repeat(2000)}`);
 
   // 1. Shared buildMemoryContext()
   const baseContext = await buildMemoryContext(project);
   assert.match(baseContext, /\[PROJECT MEMORY\]/);
-  assert.match(baseContext, /ACTIVE INDEX/);
-  assert.doesNotMatch(baseContext, /Long goal content/);
-  assert.doesNotMatch(baseContext, /Long progress content/);
+  assert.match(baseContext, /\nINDEX\n/);
+  assert.doesNotMatch(baseContext, /Long conventions content/);
+  assert.doesNotMatch(baseContext, /Long log entry/);
   assert(Buffer.byteLength(baseContext, "utf8") <= 6_000);
 
   // 2. Pi before_agent_start hook
@@ -376,4 +355,21 @@ test("All adapters suppress injection and emit structured error message when roo
   assert.match(context, /\[PROJECT MEMORY ERROR\]/);
   assert.match(context, /\.memory\/index\.md exceeds the byte budget/);
   assert.match(context, /memory compact --dry-run/);
+});
+
+test("root and packaged SKILL.md are identical and prompts stay in sync across adapters", async () => {
+  assert.equal(
+    await readFile(join(root, "SKILL.md"), "utf8"),
+    await readFile(join(root, "skills", "memory", "SKILL.md"), "utf8"),
+    "SKILL.md copies drifted; copy the root SKILL.md into skills/memory/",
+  );
+  const hook = await readFile(join(root, "scripts", "antigravity-hook.mjs"), "utf8");
+  const bundle = await import("../src/bundle.ts");
+  const preamble = /const MEMORY_CONTEXT_PREAMBLE = `([\s\S]*?)`;/.exec(hook)?.[1].replace(/\\`/g, "`");
+  assert.equal(preamble, bundle.MEMORY_CONTEXT_PREAMBLE);
+  const reminder = /const MAINTENANCE_REMINDER = "([^"]*)";/.exec(hook)?.[1];
+  assert.equal(reminder, bundle.MAINTENANCE_REMINDER);
+  const skill = await readFile(join(root, "SKILL.md"), "utf8");
+  assert.doesNotMatch(skill, /goal\.md|tasks\.md|progress\.md|ADHD|Grill-Me/);
+  assert.ok(skill.split("\n").length < 400);
 });
