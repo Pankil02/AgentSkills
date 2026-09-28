@@ -12,13 +12,7 @@ const force = process.argv.includes("--force") || process.argv.includes("-f") ||
 const targetArg = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
 const targetRoot = resolve(targetArg ?? process.cwd());
 const kiloRoot = join(targetRoot, ".kilo");
-const workflowFiles = [
-  "mem-init.md", "memory-init.md",
-  "mem-ingest.md", "memory-ingest.md",
-  "mem-sync.md", "memory-sync.md",
-  "mem-reflect.md", "memory-reflect.md",
-  "mem-tasks.md", "memory-tasks.md",
-];
+const workflowFiles = ["mem-init.md", "mem-ingest.md", "mem-sync.md", "mem-log.md"];
 
 const destinations = [
   join(kiloRoot, "skills", "project-memory"),

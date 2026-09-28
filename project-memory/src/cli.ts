@@ -10,9 +10,13 @@ import {
   generateMemoryMap,
   getMemoryStatus,
   initializeBundle,
+  listDecisions,
   migrateBundle,
   parseMarkdown,
+  readLogEntries,
+  recordDecision,
   recordEvent,
+  rotateLogs,
   refreshRegisteredSources,
   registerSource,
   registerTextSource,
@@ -22,7 +26,11 @@ import {
   validateBundle,
   withBundleLock,
   MAX_AUTO_CONTEXT_BYTES,
+  SEMANTIC_EVENT_TYPES,
+  type DecisionSummary,
+  type LogEntry,
   type MemoryPlan,
+  type MemoryStatus,
   type PathGovernanceResult,
   type SearchResult,
 } from "./bundle.ts";
@@ -49,48 +57,33 @@ const HELP = `Project Memory CLI
 Usage:
   memory <command> [options]
 
-  Commands:
-  scan                 Inspect repository files and propose tracked scopes
-  init                 Create .memory and optional tracked scopes (deep scan by default)
-  scaffold             Add one or more tracked scopes
-  migrate              Safely upgrade legacy Project Memory bundles to 0.2
-  sync                 Detect changed sources and refresh generated indexes
-  status               Show goal, source freshness, blockers, and next action
-  search               Lexical BM25 search across all .memory documents
-  check                Inspect governance holds, constraints, and scope for a code path
-  context              Emit the exact context agents should receive
-  map                  Generate on-demand codebase treemap & architecture layout
-  record               Register a source and/or append a history event
-  validate             Validate format, links, lifecycle, and freshness
-  agents-sync          Add or repair the managed AGENTS.md block
+Read (cheap, targeted):
+  status               Scopes, decision counts, recent activity, validation
+  check <path>         Governing docs, holds, and MUST/NEVER rules for a code path
+  decisions            List decisions (id, status, title) without opening files
+  log                  Show recent log entries (--recent N, --type, --since, --query, --all)
+  search <query>       BM25 search across .memory; returns ranked snippets
+  context              Emit the exact context injected into agents
+  map                  On-demand codebase treemap
+
+Write (validated, atomic):
+  log --add            Append a log entry (--type, --title, --summary, --files, --scope)
+  decide               Record a decision (--title, --decision, --context, --rejected,
+                       --consequences, --code-ref, --supersedes, --approval)
+  record               Register a source and/or append a raw event (--event)
   apply                Apply a structured memory plan
+  sync                 Refresh fingerprints/indexes, archive old log months
+  init | scaffold      Create .memory or add tracked scopes (deep scan by default)
+  migrate              Upgrade 0.1/0.2 bundles to 0.3 (archives goal/progress/tasks)
+  validate             Validate format, links, budgets, drift
+  agents-sync          Add or repair the managed AGENTS.md block
+  scan                 Inspect repository files and propose tracked scopes
 
 Common options:
-  --root <path>         Project root (default: current directory/Git root)
-  --scope <path>        Tracked scope; repeat for multiple scopes
-  --for-path <path>     Target repository file path for check command
-  --query <text>        Search query keywords (optional; positional query supported)
-  --limit <number>      Maximum search results to return (default: 10)
-  --drift               Check description and semantic drift during validate
-  --strict              Elevate broken links and orphans to errors during validate
-  --budget <bytes>      Byte budget for context command (default: 6000)
-  --deep                Perform deep codebase ingestion scan during init (default)
-  --shallow             Perform skeleton init without deep codebase scan
-  --source <path|url>   Approved source; repeat for multiple sources
-  --source-text <text>  Approved brief or conversation text (not stored raw)
-  --source-text-file <path> Read approved text from a file
-  --source-name <name>  Stable name for a text source
-  --source-kind <kind>  conversation, brief, or input
-  --event <json>        History event object
-  --event-file <path>   Read a history event JSON object from a file
-  --plan <json>         Structured memory plan for apply
-  --plan-file <path>    Read a structured memory plan from a file
-  --dry-run             Show changes without writing
-  --check               Check whether sync would change files
-  --fetch-remote        Refresh URL sources during sync
-  --toon                Emit compact Token-Oriented Object Notation (TOON) for AI agents
-  --json                Emit JSON
-  --help                Show this help
+  --root <path>  --scope <path>  --json  --toon  --dry-run  --help
+  --limit <n> / --recent <n>  --type <t> (repeatable)  --since YYYY-MM-DD  --query <text>
+  --all (include archived log months)  --drift  --strict  --check  --fetch-remote
+  --shallow  --budget <bytes>  --source <path|url>  --source-text[-file]  --plan[-file]  --event[-file]
 `;
 
 function parseArguments(argv: string[]): ParsedArguments {
@@ -107,6 +100,22 @@ function parseArguments(argv: string[]): ParsedArguments {
       strict: { type: "boolean" },
       budget: { type: "string" },
       deep: { type: "boolean" },
+      shallow: { type: "boolean" },
+      add: { type: "boolean" },
+      all: { type: "boolean" },
+      recent: { type: "string" },
+      type: { type: "string", multiple: true },
+      since: { type: "string" },
+      title: { type: "string" },
+      summary: { type: "string" },
+      files: { type: "string", multiple: true },
+      decision: { type: "string" },
+      context: { type: "string" },
+      rejected: { type: "string", multiple: true },
+      consequences: { type: "string" },
+      "code-ref": { type: "string", multiple: true },
+      supersedes: { type: "string" },
+      approval: { type: "string" },
       source: { type: "string", multiple: true },
       "source-text": { type: "string" },
       "source-text-file": { type: "string" },
@@ -139,6 +148,12 @@ export function formatToon(value: unknown): string {
       const items = value as SearchResult[];
       const lines = items.map((item) => `  ${item.score.toFixed(2)}|${item.relPath}|${item.title}|${item.snippet.replace(/\n/g, " ")}`);
       return `search_results[score|path|title|snippet]:\n${lines.join("\n")}`;
+    }
+    if (isLogEntryList(value)) {
+      return `log[date|scope|type|title]:\n${value.map((e) => `  ${e.date}|${e.scope}|${e.type}|${e.title}`).join("\n")}`;
+    }
+    if (isDecisionList(value)) {
+      return `decisions[id|status|date|title]:\n${value.map((d) => `  ${d.id}|${d.status}|${d.date ?? "-"}|${d.title}`).join("\n")}`;
     }
   }
   if (typeof value !== "object") return String(value);
@@ -184,16 +199,14 @@ export function formatToon(value: unknown): string {
   }
 
   if ("initialized" in object && "sourceCounts" in object) {
-    const sc = (object.sourceCounts ?? {}) as Record<string, number>;
-    const countsStr = Object.entries(sc).map(([k, v]) => `${k}:${v}`).join(" ");
-    const val = object.validation as { ok: boolean; counts?: { errors: number; warnings: number } };
-    const valStr = val ? `ok:${val.ok}(err:${val.counts?.errors ?? 0},warn:${val.counts?.warnings ?? 0})` : "none";
+    const status = object as unknown as MemoryStatus;
+    const sc = Object.entries(status.sourceCounts ?? {}).map(([k, v]) => `${k}:${v}`).join(" ") || "none";
+    const val = status.validation;
     const lines = [
-      `init:${object.initialized}|root:${object.root}${object.activeScope ? `|scope:${object.activeScope}` : ""}`,
-      `goal:${object.goalStatus ?? "none"}${object.nextAction ? `|next:${object.nextAction}` : ""}`,
-      `sources:${countsStr}|val:${valStr}`,
+      `init:${status.initialized}|version:${status.version ?? "none"}|scopes:${status.scopes.length}`,
+      `decisions:accepted:${status.decisions.accepted} superseded:${status.decisions.superseded}|sources:${sc}|val:ok:${val.ok}(err:${val.counts.errors},warn:${val.counts.warnings})`,
     ];
-    if (object.blockers) lines.push(`blockers:${object.blockers}`);
+    if (status.recent.length) lines.push(formatToon(status.recent));
     return lines.join("\n");
   }
 
@@ -213,10 +226,27 @@ export function formatToon(value: unknown): string {
     .join(" | ");
 }
 
+function isLogEntryList(value: unknown[]): value is LogEntry[] {
+  return typeof value[0] === "object" && value[0] !== null && "date" in value[0] && "archived" in value[0];
+}
+
+function isDecisionList(value: unknown[]): value is DecisionSummary[] {
+  return typeof value[0] === "object" && value[0] !== null && "id" in value[0] && "status" in value[0] && "path" in value[0];
+}
+
+function summarizeLog(entries: LogEntry[]): string {
+  return entries.map((e) => {
+    const detail = e.body.split("\n").filter((l) => /^-\s+\*\*(Summary|Files|Decision|Why|Evidence):\*\*/.test(l)).map((l) => `    ${l.trim()}`);
+    return [`- ${e.date} [${e.type}] ${e.title}${e.scope === "." ? "" : ` (${e.scope})`}${e.archived ? " (archived)" : ""}`, ...detail].join("\n");
+  }).join("\n");
+}
+
 function summarize(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (Array.isArray(value)) {
     if (value.length === 0) return "No results found.";
+    if (isLogEntryList(value)) return summarizeLog(value);
+    if (isDecisionList(value)) return value.map((d) => `- ${d.id} [${d.status}] ${d.title} → ${d.path}`).join("\n");
     if (value[0] && typeof value[0] === "object" && "score" in value[0] && "snippet" in value[0]) {
       const items = value as SearchResult[];
       const lines = [`Found ${items.length} matching document(s):`];
@@ -261,6 +291,23 @@ function summarize(value: unknown): string {
     if (diagnostics.length > 30) lines.push(`- ${diagnostics.length - 30} more diagnostic(s)`);
     return lines.join("\n");
   }
+  if ("initialized" in object && "sourceCounts" in object) {
+    const status = object as unknown as MemoryStatus;
+    if (!status.initialized) return "Project Memory is not initialized. Run `memory init`.";
+    const lines = [
+      `Memory ${status.version ?? "?"} · ${status.scopes.length} scope(s) · decisions: ${status.decisions.accepted} accepted, ${status.decisions.superseded} superseded`,
+      `Validation: ${status.validation.ok ? "ok" : "invalid"} (${status.validation.counts.errors} error(s), ${status.validation.counts.warnings} warning(s))`,
+    ];
+    if (status.recent.length) lines.push("Recent:", summarizeLog(status.recent));
+    return lines.join("\n");
+  }
+  if ("decision" in object && "changes" in object) {
+    const d = object.decision as DecisionSummary;
+    return `Recorded ${d.id}: ${d.title} → ${d.path}`;
+  }
+  if ("path" in object && "action" in object && Object.keys(object).every((k) => ["path", "action", "beforeHash", "afterHash"].includes(k))) {
+    return `${object.action}: ${object.path}`;
+  }
   if ("candidates" in object && "files" in object) {
     const candidates = object.candidates as Array<{ path: string; fileCount: number; confidence: string }>;
     return [
@@ -275,6 +322,10 @@ function summarize(value: unknown): string {
     return changes.length === 0 ? "No changes." : changes.map((change) => `- ${change.action}: ${change.path}`).join("\n");
   }
   return JSON.stringify(value, null, 2);
+}
+
+function operationRequiresApprovalForEvent(event: Record<string, unknown>): boolean {
+  return SEMANTIC_EVENT_TYPES.has(String(event.type ?? "").toLowerCase());
 }
 
 async function rootFor(args: ParsedArguments): Promise<string> {
@@ -343,7 +394,8 @@ export async function runCli(argv: string[], io: CliIO = {
         const knownScopes = scopes.length > 0 ? scopes : await discoverTrackedScopes(root);
         const mutate = async () => {
           const sources = await refreshRegisteredSources(root, { dryRun, fetchRemote: enabled(args, "fetch-remote") });
-          const changes = await syncIndexes(root, scan, { dryRun });
+          const rotated = await rotateLogs(root, { dryRun });
+          const changes = [...rotated, ...await syncIndexes(root, scan, { dryRun })];
           const agents = await syncAgentsFile(root, { dryRun });
           const validation = await validateBundle(root);
           return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes: [...changes, agents], validation };
@@ -352,7 +404,7 @@ export async function runCli(argv: string[], io: CliIO = {
         break;
       }
       case "status": {
-        result = await getMemoryStatus(root, flag(args, "scope") ?? args.positional[0]);
+        result = await getMemoryStatus(root);
         break;
       }
       case "context": {
@@ -427,6 +479,70 @@ export async function runCli(argv: string[], io: CliIO = {
         const limit = limitStr ? parseInt(limitStr, 10) : 10;
         const scope = flag(args, "scope");
         result = await searchMemory(root, query, { limit, scope });
+        break;
+      }
+      case "log": {
+        const scope = flag(args, "scope");
+        if (enabled(args, "add")) {
+          const title = flag(args, "title") ?? args.positional.join(" ");
+          if (!title.trim()) throw new Error("log --add requires --title <text>");
+          const types = flags(args, "type");
+          const event: Record<string, unknown> = {
+            type: types[0] ?? "note",
+            title,
+            summary: flag(args, "summary"),
+            files: flags(args, "files").length ? flags(args, "files") : undefined,
+            approval: flag(args, "approval"),
+          };
+          if (operationRequiresApprovalForEvent(event) && !flag(args, "approval")?.trim()) {
+            throw new Error(`Log type '${event.type}' changes project meaning; pass --approval "<user's approval>" after asking the user`);
+          }
+          const mutate = () => recordEvent(root, scope ?? ".", event, { dryRun });
+          result = dryRun ? await mutate() : await withBundleLock(root, async () => {
+            const change = await mutate();
+            await syncIndexes(root);
+            return change;
+          });
+          break;
+        }
+        const limitStr = flag(args, "recent") ?? flag(args, "limit");
+        const limit = limitStr ? Number.parseInt(limitStr, 10) : 10;
+        if (!Number.isFinite(limit) || limit < 0) throw new Error("--recent/--limit must be a non-negative integer");
+        const since = flag(args, "since");
+        if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error("--since must be YYYY-MM-DD");
+        result = await readLogEntries(root, {
+          scope,
+          limit,
+          types: flags(args, "type").length ? flags(args, "type") : undefined,
+          since,
+          query: flag(args, "query") ?? (args.positional.join(" ") || undefined),
+          includeArchive: enabled(args, "all"),
+        });
+        break;
+      }
+      case "decisions": {
+        const all = await listDecisions(root);
+        const types = flags(args, "type");
+        result = enabled(args, "all") ? all : all.filter((d) => types.length ? types.includes(d.status) : d.status === "accepted");
+        break;
+      }
+      case "decide": {
+        const title = flag(args, "title");
+        const decision = flag(args, "decision");
+        const approvalReason = flag(args, "approval");
+        if (!title || !decision) throw new Error("decide requires --title and --decision");
+        if (!approvalReason?.trim()) throw new Error("decide requires --approval \"<user's approval>\"; ask the user first");
+        const mutate = () => recordDecision(root, {
+          title,
+          decision,
+          context: flag(args, "context"),
+          rejected: flags(args, "rejected"),
+          consequences: flag(args, "consequences"),
+          codeRefs: flags(args, "code-ref"),
+          supersedes: flag(args, "supersedes"),
+          approvalReason,
+        }, { dryRun, scope: flag(args, "scope") });
+        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
         break;
       }
       case "check": {

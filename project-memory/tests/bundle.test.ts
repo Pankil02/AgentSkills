@@ -6,12 +6,17 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   applyMemoryPlan,
-  checkCompletionReadiness,
+  checkPathGovernance,
   generateMemoryMap,
   initializeBundle,
+  listDecisions,
   migrateBundle,
   parseMarkdown,
+  readLogEntries,
   readUnmanagedAgentsContent,
+  recordDecision,
+  recordEvent,
+  rotateLogs,
   refreshRegisteredSources,
   registerSource,
   registerTextSource,
@@ -87,8 +92,11 @@ test("initialization creates tracked scopes with agents.md and log.md only and i
   assert.deepEqual(first.scopes, [".", ...scopes].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b)));
 
   // Root has all root core files
-  for (const file of ["index.md", "goal.md", "progress.md", "tasks.md", "log.md"]) {
+  for (const file of ["index.md", "conventions.md", "log.md", "decisions/index.md"]) {
     assert.equal(typeof await readFile(join(root, ".memory", file), "utf8"), "string");
+  }
+  for (const removed of ["goal.md", "progress.md", "tasks.md"]) {
+    assert.equal(await readIfExists(join(root, ".memory", removed)), undefined, `${removed} must not be created`);
   }
 
   // Each subfolder has ONLY agents.md and log.md
@@ -187,7 +195,7 @@ test("newer format versions are readable as diagnostics but blocked from mutatio
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
   const indexPath = join(root, ".memory", "index.md");
-  const newer = updateMarkdownFrontmatter(await readFile(indexPath, "utf8"), { memory_version: "0.3" });
+  const newer = updateMarkdownFrontmatter(await readFile(indexPath, "utf8"), { memory_version: "0.9" });
   await writeFile(indexPath, newer);
   const validation = await validateBundle(root);
   assert.equal(validation.ok, false);
@@ -207,7 +215,7 @@ test("partial bundles rebuild missing indexes without changing valid documents",
   await rm(join(root, ".memory", "src", "index.md"), { force: true });
   await syncIndexes(root);
   assert.equal(await readFile(customPath, "utf8"), custom);
-  assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.2"/);
+  assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.3"/);
   assert.equal((await validateBundle(root)).ok, true);
 });
 
@@ -223,39 +231,16 @@ test("generated replacement preserves manual content and rejects malformed marke
   assert.throws(() => replaceGeneratedRegion(nested, "a", "x"), /overlap or nest/);
 });
 
-test("completion readiness requires stable criteria and linked verified evidence", async (t) => {
-  const root = await temporaryProject();
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await initializeBundle(root);
-  const goalPath = join(root, ".memory", "goal.md");
-  const progressPath = join(root, ".memory", "progress.md");
-  let goal = await readFile(goalPath, "utf8");
-  goal = goal.replace("Use stable IDs in the `AC-NNN` form. Each criterion must be independently verifiable.", "- AC-001: Export succeeds.\n- AC-002: Deletion is audited.");
-  await writeFile(goalPath, goal);
-  let readiness = await checkCompletionReadiness(root);
-  assert.equal(readiness.ready, false);
-  assert(readiness.missing.some((item) => item.includes("AC-001")));
-
-  await mkdir(join(root, "artifacts"));
-  await writeFile(join(root, "artifacts", "export.txt"), "passed\n");
-  await writeFile(join(root, "artifacts", "audit.txt"), "passed\n");
-  let progress = await readFile(progressPath, "utf8");
-  progress = progress.replace("|---|---|---|", "|---|---|---|\n| AC-001 | verified | [test output](repo://artifacts/export.txt#L1) |\n| AC-002 | passed | repo://artifacts/audit.txt?run=latest | ");
-  await writeFile(progressPath, progress);
-  readiness = await checkCompletionReadiness(root);
-  assert.equal(readiness.ready, true, readiness.missing.join("; "));
-  assert.deepEqual(readiness.verified, ["AC-001", "AC-002"]);
-});
-
-test("semantic plans require approval and enforce lifecycle transitions", async (t) => {
+test("semantic plans require approval; non-semantic generated updates do not", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
 
-  const unapproved: MemoryPlan = { operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "interviewing" } }] };
-  await assert.rejects(() => applyMemoryPlan(root, unapproved), /explicit user approval/);
   await assert.rejects(() => applyMemoryPlan(root, {
-    operations: [{ action: "write_document", path: "architecture.md", content: "---\ntype: Architecture\ntitle: Architecture\n---\n# Architecture\n\nNew project meaning.\n" }],
+    operations: [{ action: "update_frontmatter", path: "conventions.md", values: { description: "Changed conventions summary." } }],
+  }), /explicit user approval/);
+  await assert.rejects(() => applyMemoryPlan(root, {
+    operations: [{ action: "append_log", scope: ".", event: { type: "decision", title: "Sneaky decision" } }],
   }), /explicit user approval/);
   await assert.rejects(() => applyMemoryPlan(root, {
     operations: [{ action: "unsupported" } as never],
@@ -265,89 +250,137 @@ test("semantic plans require approval and enforce lifecycle transitions", async 
     approvalReason: "Attempted forged source",
     operations: [{ action: "write_document", path: "sources/forged.md", content: "---\ntype: Source\nresource: repo://secret\nsource_hash: sha256:fake\n---\n# Forged\n" }],
   }), /Create source records/);
-
-  const activeProgress = (await readFile(join(root, ".memory", "progress.md"), "utf8") )
-    .replace("**Action:** Complete the interview.", "**Action:** Implement the approved export path.")
-    .replace("**Requirement:** Unresolved.", "**Requirement:** AC-001.")
-    .replace("**Likely files:** Unknown.", "**Likely files:** `src/export.ts`.")
-    .replace("**Verification:** User approval.", "**Verification:** `npm test -- export`.")
-    .replace("**Approval:** pending", "**Approval:** approved by user");
-  const activate: MemoryPlan = {
-    approved: true,
-    approvalReason: "User approved the goal and activation",
-    operations: [
-      { action: "update_frontmatter", path: "goal.md", values: { status: "interviewing" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "awaiting-approval" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "ready", provenance: "user-confirmed" } },
-      { action: "write_document", path: "progress.md", content: activeProgress },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "active" } },
-      { action: "append_log", scope: ".", event: { type: "decision", title: "Goal activated", approval: "explicit" } },
-    ],
-  };
-  const beforeDryRun = await readFile(join(root, ".memory", "goal.md"), "utf8");
-  const preview = await applyMemoryPlan(root, activate, { dryRun: true });
-  assert.equal(preview.validation?.ok, true, JSON.stringify(preview.validation?.diagnostics));
-  assert.ok(preview.changes.some((change) => change.action === "update"));
-  assert.equal(await readFile(join(root, ".memory", "goal.md"), "utf8"), beforeDryRun, "dry-run must not mutate the real bundle");
-  const result = await applyMemoryPlan(root, activate);
-  assert.equal(result.validation?.ok, true, JSON.stringify(result.validation?.diagnostics));
-  assert.equal(parseMarkdown(await readFile(join(root, ".memory", "goal.md"), "utf8")).data.status, "active");
-
-  const progressPath = join(root, ".memory", "progress.md");
-  const progressBefore = await readFile(progressPath, "utf8");
-  const invalidProgress = progressBefore.replace("## Next action", "## Removed next action");
   await assert.rejects(() => applyMemoryPlan(root, {
-    operations: [{ action: "write_document", path: "progress.md", content: invalidProgress }],
-  }), /produced invalid bundle/);
-  assert.equal(await readFile(progressPath, "utf8"), progressBefore, "failed plans must roll back all writes");
+    approved: true,
+    approvalReason: "Recreate legacy file",
+    operations: [{ action: "write_document", path: "goal.md", content: "---\ntype: Goal\ntitle: x\n---\n# Goal\n" }],
+  }), /not part of format/);
 
-  await applyMemoryPlan(root, {
-    approved: true,
-    approvalReason: "Begin verification",
-    operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "verifying" } }],
+  // Non-semantic log entries apply without approval.
+  const result = await applyMemoryPlan(root, {
+    operations: [{ action: "append_log", scope: ".", event: { type: "fix", title: "Fixed flaky test", summary: "Race in setup." } }],
   });
-  const invalid: MemoryPlan = {
+  assert.equal(result.validation?.ok, true, JSON.stringify(result.validation?.diagnostics));
+
+  // Approved conventions update; dry-run leaves the bundle untouched; failures roll back.
+  const conventionsPath = join(root, ".memory", "conventions.md");
+  const before = await readFile(conventionsPath, "utf8");
+  const updated = before.replace("## Rules\n- none recorded", "## Rules\n- MUST: Run `npm test` before commit.");
+  const plan: MemoryPlan = { approved: true, approvalReason: "User chose option A", operations: [{ action: "write_document", path: "conventions.md", content: updated }] };
+  const preview = await applyMemoryPlan(root, plan, { dryRun: true });
+  assert.equal(preview.validation?.ok, true);
+  assert.equal(await readFile(conventionsPath, "utf8"), before, "dry-run must not mutate the real bundle");
+  await applyMemoryPlan(root, plan);
+  assert.match(await readFile(conventionsPath, "utf8"), /MUST: Run `npm test`/);
+
+  const afterApply = await readFile(conventionsPath, "utf8");
+  await assert.rejects(() => applyMemoryPlan(root, {
     approved: true,
-    approvalReason: "Attempted completion",
-    operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "complete" } }],
-  };
-  await assert.rejects(() => applyMemoryPlan(root, invalid), /Completion evidence is incomplete/);
+    approvalReason: "Break the bundle",
+    operations: [
+      { action: "write_document", path: "conventions.md", content: afterApply.replace("MUST:", "MUST NOT:") },
+      { action: "write_document", path: "decisions/D-001-bad.md", content: "---\ntype: Decision\nid: D-999\nstatus: nope\n---\n# Bad\n" },
+    ],
+  }), /produced invalid bundle/);
+  assert.equal(await readFile(conventionsPath, "utf8"), afterApply, "failed plans must roll back all writes");
 });
 
-test("completion plans preserve criteria and support dry-run evidence from the real repository", async (t) => {
+test("decisions are numbered files, supersession is tracked, and index lists them", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
-  await writeFile(join(root, "evidence.txt"), "passed\n");
-  const goalPath = join(root, ".memory", "goal.md");
-  const progressPath = join(root, ".memory", "progress.md");
-  const goal = (await readFile(goalPath, "utf8")).replace("Use stable IDs in the `AC-NNN` form. Each criterion must be independently verifiable.", "- AC-001: Verified behavior.");
-  const progress = (await readFile(progressPath, "utf8")).replace("|---|---|---|", "|---|---|---|\n| AC-001 | verified | repo://evidence.txt |");
-  await applyMemoryPlan(root, {
-    approved: true,
-    approvalReason: "Approve test goal",
-    operations: [
-      { action: "write_document", path: "goal.md", content: goal },
-      { action: "write_document", path: "progress.md", content: progress },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "interviewing" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "awaiting-approval" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "ready" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "active" } },
-      { action: "update_frontmatter", path: "goal.md", values: { status: "verifying" } },
-    ],
-  });
-  const preview = await applyMemoryPlan(root, {
-    approved: true,
-    approvalReason: "Approve completion preview",
-    operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "complete" } }],
-  }, { dryRun: true });
-  assert.equal(preview.validation?.ok, true);
-  const replacement = (await readFile(goalPath, "utf8")).replace("status: verifying", "status: complete").replace("AC-001", "AC-002");
-  await assert.rejects(() => applyMemoryPlan(root, {
-    approved: true,
-    approvalReason: "Attempt criteria replacement",
-    operations: [{ action: "write_document", path: "goal.md", content: replacement }],
-  }), /Complete goals with update_frontmatter/);
+  const now = new Date("2026-03-01T00:00:00Z");
+
+  await assert.rejects(() => recordDecision(root, { title: "x", decision: "y", approvalReason: "" }), /explicit user approval/);
+
+  const first = await recordDecision(root, {
+    title: "Use Postgres",
+    decision: "Primary store is Postgres 16.",
+    rejected: ["SQLite: no concurrent writers"],
+    codeRefs: ["src/db/**"],
+    approvalReason: "User picked option A",
+  }, { now });
+  assert.equal(first.decision.id, "D-001");
+  assert.match(first.decision.path, /\.memory\/decisions\/D-001-use-postgres\.md$/);
+
+  const second = await recordDecision(root, {
+    title: "Use Postgres 17",
+    decision: "Upgrade to Postgres 17.",
+    supersedes: "D-001",
+    approvalReason: "User approved upgrade",
+  }, { now });
+  assert.equal(second.decision.id, "D-002");
+
+  const decisions = await listDecisions(root);
+  assert.deepEqual(decisions.map((d) => [d.id, d.status]), [["D-001", "superseded"], ["D-002", "accepted"]]);
+  await assert.rejects(() => recordDecision(root, { title: "Again", decision: "z", supersedes: "D-001", approvalReason: "ok" }), /already superseded/);
+
+  const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  assert.match(rootIndex, /\[D-002\]\(\/decisions\/D-002-use-postgres-17\.md\)/);
+  assert.doesNotMatch(rootIndex, /\[D-001\]/, "superseded decisions stay out of the router");
+  const decisionsIndex = await readFile(join(root, ".memory", "decisions", "index.md"), "utf8");
+  assert.match(decisionsIndex, /\| \[D-001\]\(\.\/D-001-use-postgres\.md\) \| superseded \|/);
+
+  const governance = await checkPathGovernance(root, "src/db/pool.ts");
+  assert(!governance.governingDocuments.some((d) => d.path.includes("D-001")), "superseded decisions must not govern");
+
+  const log = await readLogEntries(root, { types: ["decision"] });
+  assert.equal(log.length, 2);
+  assert.equal((await validateBundle(root)).ok, true);
+});
+
+test("log entries are filterable and old months rotate into archives", async (t) => {
+  const root = await temporaryProject();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await initializeBundle(root, [], { now: new Date("2026-01-10T00:00:00Z") });
+  await recordEvent(root, ".", { type: "fix", title: "Fixed login race", summary: "Mutex around refresh." }, { now: new Date("2026-01-15T00:00:00Z") });
+  await recordEvent(root, ".", { type: "finding", title: "Cache is per-process" }, { now: new Date("2026-02-02T00:00:00Z") });
+  await recordEvent(root, ".", { type: "change", title: "Added export endpoint" }, { now: new Date("2026-03-05T00:00:00Z") });
+
+  const recent = await readLogEntries(root, { limit: 2 });
+  assert.deepEqual(recent.map((e) => e.title), ["Added export endpoint", "Cache is per-process"]);
+  assert.deepEqual((await readLogEntries(root, { types: ["fix"] })).map((e) => e.title), ["Fixed login race"]);
+  assert.deepEqual((await readLogEntries(root, { since: "2026-02-01" })).length, 2);
+  assert.deepEqual((await readLogEntries(root, { query: "mutex" })).map((e) => e.type), ["fix"]);
+
+  const preview = await rotateLogs(root, { dryRun: true, now: new Date("2026-03-20T00:00:00Z") });
+  assert(preview.some((c) => c.path.endsWith("log/2026-01.md")));
+  assert.equal(await readIfExists(join(root, ".memory", "log", "2026-01.md")), undefined, "dry-run must not write archives");
+
+  await rotateLogs(root, { now: new Date("2026-03-20T00:00:00Z") });
+  const hot = await readFile(join(root, ".memory", "log.md"), "utf8");
+  assert.match(hot, /## 2026-03-05/);
+  assert.doesNotMatch(hot, /## 2026-01-15|## 2026-02-02/);
+  assert.match(await readFile(join(root, ".memory", "log", "2026-01.md"), "utf8"), /Fixed login race/);
+  assert.match(await readFile(join(root, ".memory", "log", "2026-02.md"), "utf8"), /Cache is per-process/);
+
+  assert.equal((await readLogEntries(root, {})).length, 1);
+  const withArchive = await readLogEntries(root, { includeArchive: true, excludeTypes: ["init"] });
+  assert.deepEqual(withArchive.map((e) => e.title), ["Added export endpoint", "Cache is per-process", "Fixed login race"]);
+  assert(withArchive.slice(1).every((e) => e.archived));
+
+  // Rotation is idempotent.
+  const again = await rotateLogs(root, { now: new Date("2026-03-20T00:00:00Z") });
+  assert.equal(again.length, 0);
+  const validation = await validateBundle(root, { strict: true });
+  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+});
+
+test("conventions govern every path and scope briefs govern their subtree", async (t) => {
+  const root = await temporaryProject(true);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scope = "apps/api/src/domains/user";
+  await initializeBundle(root, [scope]);
+  const conventionsPath = join(root, ".memory", "conventions.md");
+  const conventions = (await readFile(conventionsPath, "utf8")).replace("## Rules\n- none recorded", "## Rules\n- NEVER: Log raw request bodies.");
+  await applyMemoryPlan(root, { approved: true, approvalReason: "test", operations: [{ action: "write_document", path: "conventions.md", content: conventions }] });
+
+  const result = await checkPathGovernance(root, `${scope}/profile.ts`);
+  assert(result.governingDocuments.some((d) => d.path === ".memory/conventions.md"));
+  assert(result.governingDocuments.some((d) => d.path === `.memory/${scope}/agents.md`));
+  assert(result.constraints.includes("NEVER: Log raw request bodies."));
+  const unrelated = await checkPathGovernance(root, "README.md");
+  assert(!unrelated.governingDocuments.some((d) => d.path.endsWith("agents.md")));
 });
 
 test("structured plans cannot forge or leak through source records", async (t) => {
@@ -365,10 +398,12 @@ test("structured plans cannot forge or leak through source records", async (t) =
     operations: [{ action: "write_document", path: source.path.replace(/^\.memory\//, ""), content }],
   }), /likely secret material/);
   await assert.rejects(() => applyMemoryPlan(root, {
-    operations: [{ action: "update_frontmatter", path: "progress.md", values: { note: "password=supersecretvalue123" } }],
+    approved: true,
+    approvalReason: "Attempt secret frontmatter",
+    operations: [{ action: "update_frontmatter", path: "conventions.md", values: { note: "password=supersecretvalue123" } }],
   }), /likely secret material/);
   await assert.rejects(() => applyMemoryPlan(root, {
-    operations: [{ action: "replace_generated", path: "index.md", region: "focus", content: "access_token=supersecretvalue123" }],
+    operations: [{ action: "replace_generated", path: "index.md", region: "recent", content: "access_token=supersecretvalue123" }],
   }), /likely secret material/);
 });
 
@@ -421,15 +456,15 @@ test("AGENTS synchronization preserves user content and rejects duplicate marker
   await assert.rejects(() => syncAgentsFile(root), /malformed or duplicate/);
 });
 
-test("initialization ingests existing AGENTS.md content into goal.md and creates AGENTS.md if missing", async (t) => {
+test("initialization preserves existing AGENTS.md content and appends the managed block", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "AGENTS.md"), "# Original Guidelines\n\n- Always test before commit.\n");
-  
+
   await initializeBundle(root);
-  const goalContent = await readFile(join(root, ".memory", "goal.md"), "utf8");
-  assert.match(goalContent, /Context from AGENTS\.md/);
-  assert.match(goalContent, /Always test before commit/);
+  const agents = await readFile(join(root, "AGENTS.md"), "utf8");
+  assert.match(agents, /Always test before commit/);
+  assert.match(agents, /<!-- memory:start -->[\s\S]*memory check --for-path[\s\S]*<!-- memory:end -->/);
 
   const unmanaged = await readUnmanagedAgentsContent(root);
   assert.equal(unmanaged, "# Original Guidelines\n\n- Always test before commit.");
@@ -473,58 +508,56 @@ test("validation rejects symbolic links inside the bundle", async (t) => {
   assert(validation.diagnostics.some((diagnostic) => diagnostic.code === "symlink"));
 });
 
-test("initializeBundle with deep scan auto-scaffolds candidate scopes and populates goal architecture", async (t) => {
+test("deep init scaffolds scopes with observed facts and no goal/task tracking", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(join(root, "package.json"), JSON.stringify({
     name: "deep-app",
+    packageManager: "npm@10.0.0",
     dependencies: { react: "^18.0.0", next: "^14.0.0" },
   }));
-  await writeFile(join(root, ".env.example"), "DATABASE_URL=postgresql://localhost:5432/db\n");
 
   const init = await initializeBundle(root, [], { deep: true });
   assert(init.scopes.includes("apps/api/src/domains/user"));
   assert(init.scopes.includes("apps/web/app/dashboard"));
 
-  const rootGoal = await readFile(join(root, ".memory", "goal.md"), "utf8");
-  assert.match(rootGoal, /Auto-Detected Architecture & Tech Stack/);
-  assert.match(rootGoal, /TypeScript/);
-  assert.match(rootGoal, /Next\.js/);
-  assert.match(rootGoal, /DATABASE_URL/);
+  const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
+  assert.match(rootIndex, /Stack: .*TypeScript/);
+  assert.match(rootIndex, /Next\.js/);
+  const conventions = await readFile(join(root, ".memory", "conventions.md"), "utf8");
+  assert.match(conventions, /Package manager: `npm` \(observed\)/);
 
   const scopeAgents = await readFile(join(root, ".memory", "apps", "api", "src", "domains", "user", "agents.md"), "utf8");
-  assert.match(scopeAgents, /Auto-scaffolded scope for `apps\/api\/src\/domains\/user`/);
-  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "goal.md")), undefined);
-  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "progress.md")), undefined);
-  assert.equal(await readIfExists(join(root, ".memory", "apps", "api", "src", "domains", "user", "tasks.md")), undefined);
+  assert.match(scopeAgents, /## Purpose/);
+  assert.match(scopeAgents, /## Map\n- Code root: `apps\/api\/src\/domains\/user\/` \(\d+ files, observed\)/);
+  assert.match(scopeAgents, /code_refs:\n\s+- apps\/api\/src\/domains\/user\/\*\*/);
+  assert.doesNotMatch(scopeAgents, /Acceptance criteria|Active tasks|Next action|status:/i);
 
   const validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 });
 
-test("initializeBundle creates executive root index capsule and provides treemap on demand", async (t) => {
+test("root index is a compact router and provides treemap on demand", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
   const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
-  assert.match(rootIndex, /## Project/);
-  assert.match(rootIndex, /## Now/);
-  assert.match(rootIndex, /## Architecture/);
-  assert.match(rootIndex, /## Find/);
-  assert.match(rootIndex, /## Active scopes/);
-  assert.doesNotMatch(rootIndex, /## Codebase structure/);
+  for (const heading of ["## Project", "## Find", "## Recent decisions", "## Recent activity", "## Scopes"]) {
+    assert.match(rootIndex, new RegExp(heading));
+  }
+  assert.doesNotMatch(rootIndex, /goal\.md|tasks\.md|progress\.md|## Now|Next action/);
+  assert.ok(Buffer.byteLength(rootIndex, "utf8") < 3_000, `router too large: ${Buffer.byteLength(rootIndex, "utf8")}`);
 
   const treemap = await generateMemoryMap(root);
   assert.match(treemap, /profile\.ts # API route handler/);
   assert.match(treemap, /docs\/ # Documentation/);
 });
 
-test("validation enforces hard byte budgets on root index and scope index", async (t) => {
+test("validation enforces byte budgets and rejects legacy tracking files", async (t) => {
   const root = await temporaryProject(false);
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root, ["src/feature"]);
 
-  // 1. Root index warnings (> 4000) and errors (> 6000)
   const originalIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
   await writeFile(join(root, ".memory", "index.md"), `${originalIndex}\n<!-- pad -->\n${"x".repeat(3_000)}`);
   let validation = await validateBundle(root);
@@ -535,51 +568,37 @@ test("validation enforces hard byte budgets on root index and scope index", asyn
   validation = await validateBundle(root);
   assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((d) => d.code === "budget-root-index" && d.severity === "error"));
-
-  // Restore root index
   await writeFile(join(root, ".memory", "index.md"), originalIndex);
 
-  // 2. Scope index error (> 8000)
   await writeFile(join(root, ".memory", "src", "feature", "index.md"), `# Feature\n<!-- pad -->\n${"x".repeat(8_500)}`);
   validation = await validateBundle(root);
-  assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((d) => d.code === "budget-scope-index" && d.severity === "error"));
-
-  // 3. Subfolder cannot contain goal.md, progress.md, or tasks.md
   await rm(join(root, ".memory", "src", "feature", "index.md"), { force: true });
-  await writeFile(join(root, ".memory", "src", "feature", "goal.md"), "# Sub Goal");
+
+  const agentsPath = join(root, ".memory", "src", "feature", "agents.md");
+  const agents = await readFile(agentsPath, "utf8");
+  await writeFile(agentsPath, `${agents}\n## Extra\n${"y".repeat(17_000)}`);
   validation = await validateBundle(root);
-  assert.equal(validation.ok, false);
-  assert(validation.diagnostics.some((d) => d.code === "root-only-file" && d.severity === "error"));
-});
-
-test("validation enforces active tasks limit and document size warnings", async (t) => {
-  const root = await temporaryProject(false);
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await initializeBundle(root);
-
-  // 1. Document size warning (> 16,000 bytes)
-  const originalGoal = await readFile(join(root, ".memory", "goal.md"), "utf8");
-  await writeFile(join(root, ".memory", "goal.md"), `${originalGoal}\n### Extra\n${"y".repeat(17_000)}`);
-  let validation = await validateBundle(root);
-  assert.equal(validation.ok, true);
   assert(validation.diagnostics.some((d) => d.code === "budget-document-size" && d.severity === "warning"));
-  await writeFile(join(root, ".memory", "goal.md"), originalGoal);
+  await writeFile(agentsPath, agents);
 
-  // 2. Active tasks limit (> 5 tasks error)
-  const originalTasks = await readFile(join(root, ".memory", "tasks.md"), "utf8");
-  const tooManyTasks = originalTasks.replace("## Active tasks (Do Now)", `## Active tasks (Do Now)\n\n1. [ ] Task 1\n2. [ ] Task 2\n3. [ ] Task 3\n4. [ ] Task 4\n5. [ ] Task 5\n6. [ ] Task 6`);
-  await writeFile(join(root, ".memory", "tasks.md"), tooManyTasks);
+  for (const legacy of ["tasks.md", "src/feature/goal.md"]) {
+    await writeFile(join(root, ".memory", legacy), "---\ntype: Tasks\n---\n# Legacy\n");
+    validation = await validateBundle(root);
+    assert.equal(validation.ok, false);
+    assert(validation.diagnostics.some((d) => d.code === "legacy-file"), legacy);
+    await rm(join(root, ".memory", legacy));
+  }
+
+  await writeFile(join(root, ".memory", "decisions", "D-001-x.md"), "---\ntype: Decision\nid: D-002\ntitle: x\nstatus: maybe\n---\n# x\n");
   validation = await validateBundle(root);
-  assert.equal(validation.ok, false);
-  assert(validation.diagnostics.some((d) => d.code === "budget-active-tasks" && d.severity === "error"));
+  assert(validation.diagnostics.some((d) => d.code === "decision-id"));
+  assert(validation.diagnostics.some((d) => d.code === "decision-status"));
 });
 
-test("large repository with 100 tracked scopes produces bounded root index <= 6,000 bytes and <= 5 visible scopes", async (t) => {
+test("large repository with 100 tracked scopes produces bounded root index and <= 5 visible scopes", async (t) => {
   const root = await temporaryProject(false);
   t.after(() => rm(root, { recursive: true, force: true }));
-
-  // Create 100 scopes with dummy source files
   const scopes: string[] = [];
   for (let i = 0; i < 100; i++) {
     const scopePath = `packages/pkg-${i.toString().padStart(3, "0")}`;
@@ -593,27 +612,18 @@ test("large repository with 100 tracked scopes produces bounded root index <= 6,
 
   const rootIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
   const byteLength = Buffer.byteLength(rootIndex, "utf8");
+  assert.ok(byteLength <= 4_000, `Root index exceeds 4000 bytes: ${byteLength} bytes`);
 
-  // Verify byte budget: must be well under 6,000 bytes (and under 4,000 bytes target)
-  assert.ok(byteLength <= 6_000, `Root index exceeds 6000 bytes: ${byteLength} bytes`);
-  assert.ok(byteLength <= 4_000, `Root index exceeds 4000 bytes warning threshold: ${byteLength} bytes`);
-
-  // Verify scopes section contains at most 5 entries plus summary line
   const scopesSection = rootIndex.split("<!-- memory:generated:start scopes -->")[1]?.split("<!-- memory:generated:end scopes -->")[0] ?? "";
   const scopeItemLines = scopesSection.trim().split("\n").filter((l) => l.trim().startsWith("- ["));
-  assert.equal(scopeItemLines.length, 5, `Expected exactly 5 visible scope items, found ${scopeItemLines.length}`);
-  assert.match(scopesSection, /- \.\.\. \(96 more tracked scope\(s\)\)/);
+  assert.equal(scopeItemLines.length, 5);
+  assert.match(scopesSection, /- … 95 more: `memory status`/);
 
   const validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
-
-  // Verify memory map generates on demand without inflating startup context
-  const treemap = await generateMemoryMap(root);
-  assert.match(treemap, /pkg-000/);
-  assert.match(treemap, /pkg-099/);
 });
 
-test("0.2 initialization scaffolds architecture lenses with mandatory flows and Flow.md contracts", async (t) => {
+test("initialization scaffolds architecture lenses with mandatory flows and Flow.md contracts", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
@@ -621,282 +631,126 @@ test("0.2 initialization scaffolds architecture lenses with mandatory flows and 
   const archIndex = await readFile(join(root, ".memory", "architecture", "index.md"), "utf8");
   assert.match(archIndex, /type: ArchitectureIndex/);
   assert.match(archIndex, /## Flow map/);
-
-  // Mandatory flows must exist
   for (const layer of ["system-design", "domain", "security"]) {
-    const flowPath = join(root, ".memory", "architecture", layer, "Flow.md");
-    const flowContent = await readFile(flowPath, "utf8");
+    const flowContent = await readFile(join(root, ".memory", "architecture", layer, "Flow.md"), "utf8");
     assert.match(flowContent, new RegExp(`layer: ${layer}`));
     assert.match(flowContent, /type: Flow/);
-    assert.match(flowContent, /## Responsibility/);
-    assert.match(flowContent, /## Route/);
-    assert.match(flowContent, /## Steps/);
     assert.match(flowContent, /## Domain contract/);
     assert.match(flowContent, /## Code anchors/);
   }
-
   const validation = await validateBundle(root);
   assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
 });
 
-test("0.2 validation rejects non-Flow.md files and invalid layer assignments", async (t) => {
+test("validation rejects non-Flow.md files and invalid layer assignments", async (t) => {
   const root = await temporaryProject(false);
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
-
-  // 1. Wrong casing flow.md instead of Flow.md
-  await rename(
-    join(root, ".memory", "architecture", "domain", "Flow.md"),
-    join(root, ".memory", "architecture", "domain", "flow.md"),
-  );
+  const domainDir = join(root, ".memory", "architecture", "domain");
+  await rename(join(domainDir, "Flow.md"), join(domainDir, "flow.md"));
   let validation = await validateBundle(root);
   assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((d) => d.code === "missing-mandatory-flow" || d.code === "invalid-flow-file"));
+  await rename(join(domainDir, "flow.md"), join(domainDir, "Flow.md"));
 
-  // Restore Flow.md
-  await rename(
-    join(root, ".memory", "architecture", "domain", "flow.md"),
-    join(root, ".memory", "architecture", "domain", "Flow.md"),
-  );
-
-  // 2. Layer mismatch between frontmatter and directory
-  const domainFlow = await readFile(join(root, ".memory", "architecture", "domain", "Flow.md"), "utf8");
-  await writeFile(
-    join(root, ".memory", "architecture", "domain", "Flow.md"),
-    domainFlow.replace("layer: domain", "layer: frontend"),
-  );
+  const domainFlow = await readFile(join(domainDir, "Flow.md"), "utf8");
+  await writeFile(join(domainDir, "Flow.md"), domainFlow.replace("layer: domain", "layer: frontend"));
   validation = await validateBundle(root);
   assert.equal(validation.ok, false);
   assert(validation.diagnostics.some((d) => d.code === "flow-layer-mismatch"));
 });
 
-test("0.2 safe migration upgrades 0.1 legacy bundle to 0.2 with architecture lenses", async (t) => {
+async function snapshotTree(dir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  async function walk(current: string): Promise<void> {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else out.set(relative(dir, path), await readFile(path, "utf8"));
+    }
+  }
+  await walk(dir);
+  return out;
+}
+
+test("migration upgrades a 0.1 bundle to 0.3 and archives goal/progress/tasks verbatim", async (t) => {
   const root = await temporaryProject(false);
   t.after(() => rm(root, { recursive: true, force: true }));
-
-  // Create a minimal 0.1 legacy bundle
   await mkdir(join(root, ".memory", "sources"), { recursive: true });
-  await writeFile(join(root, ".memory", "index.md"), `---
-memory_version: "0.1"
-project: Legacy
-summary: Legacy project
-active_scope: .
-active_objective: OBJ-001
-status: draft
-title: Legacy Project Memory
-description: Executive memory capsule.
-timestamp: 2026-01-01T00:00:00Z
-repository_head: null
-repository_fingerprint: null
-last_scan_at: null
----
-# Project Memory
-
-## Project
-- Purpose: Legacy
-
-## Active
-<!-- memory:generated:start active -->
-- Objective: [OBJ-001](/goal.md)
-<!-- memory:generated:end active -->
-
-## Map
-- [Goal](/goal.md)
-- [Progress](/progress.md)
-- [Tasks](/tasks.md)
-- [History](/log.md)
-- [Sources](/sources/)
-
-## Scopes
-<!-- memory:generated:start scopes -->
-- [Project](/goal.md) — active
-<!-- memory:generated:end scopes -->
-`);
-
-  await writeFile(join(root, ".memory", "goal.md"), `---
-type: Goal
-title: Legacy goal
-description: Goal
-timestamp: 2026-01-01T00:00:00Z
-scope: .
-status: draft
-provenance: observed
-uid: 00000000-0000-0000-0000-000000000001
----
-# Goal
-`);
-
-  await writeFile(join(root, ".memory", "progress.md"), `---
-type: Progress
-title: Legacy progress
-description: Progress
-timestamp: 2026-01-01T00:00:00Z
-scope: .
----
-# Progress
-`);
-
-  await writeFile(join(root, ".memory", "tasks.md"), `---
-type: Tasks
-title: Legacy tasks
-description: Tasks
-timestamp: 2026-01-01T00:00:00Z
-scope: .
----
-# Tasks
-`);
-
-  await writeFile(join(root, ".memory", "log.md"), `# Log\n`);
+  const legacyIndex = `---\nmemory_version: "0.1"\nproject: Legacy\nactive_scope: .\nstatus: draft\ntitle: Legacy\n---\n# Project Memory\n\n- [Goal](/goal.md)\n`;
+  const legacyGoal = `---\ntype: Goal\ntitle: Legacy goal\nscope: .\nstatus: draft\n---\n# Goal\n\nShip v1.\n`;
+  await writeFile(join(root, ".memory", "index.md"), legacyIndex);
+  await writeFile(join(root, ".memory", "goal.md"), legacyGoal);
+  await writeFile(join(root, ".memory", "progress.md"), `---\ntype: Progress\nscope: .\n---\n# Progress\n`);
+  await writeFile(join(root, ".memory", "tasks.md"), `---\ntype: Tasks\nscope: .\n---\n# Tasks\n`);
+  await writeFile(join(root, ".memory", "log.md"), `# Log\n\n## 2026-01-01\n\n### Creation\n- **Update:** Legacy entry.\n`);
   await writeFile(join(root, ".memory", "sources", "index.md"), `# Sources\n`);
 
-  // Pre-migration validation fails on 0.1
-  let validation = await validateBundle(root);
-  assert.equal(validation.ok, false);
-  assert(validation.diagnostics.some((d) => d.code === "version"));
+  assert.equal((await validateBundle(root)).ok, false);
 
-  // Run migration
+  const beforeDryRun = await snapshotTree(join(root, ".memory"));
+  const preview = await migrateBundle(root, { dryRun: true });
+  assert(preview.archived.includes(".memory/goal.md"));
+  assert.deepEqual(await snapshotTree(join(root, ".memory")), beforeDryRun, "dry-run must not write");
+
   const result = await migrateBundle(root);
-  assert.equal(result.version, "0.2");
-  assert.equal(result.validation.ok, true);
+  assert.equal(result.version, "0.3");
+  assert.equal(result.validation.ok, true, JSON.stringify(result.validation.diagnostics));
 
-  // Check 0.2 root index
-  const migratedIndex = await readFile(join(root, ".memory", "index.md"), "utf8");
-  assert.match(migratedIndex, /memory_version: "0.2"/);
-  assert.match(migratedIndex, /architecture_mode:\s*"?ddd"?/);
-  assert.match(migratedIndex, /## Architecture/);
-
-  // Check architecture files
-  assert.equal(typeof await readFile(join(root, ".memory", "architecture", "index.md"), "utf8"), "string");
-  for (const layer of ["system-design", "domain", "security"]) {
-    assert.equal(typeof await readFile(join(root, ".memory", "architecture", layer, "Flow.md"), "utf8"), "string");
+  for (const removed of ["goal.md", "progress.md", "tasks.md"]) {
+    assert.equal(await readIfExists(join(root, ".memory", removed)), undefined);
   }
+  assert.equal(await readFile(join(root, ".memory", "archive", "legacy", "goal.md"), "utf8"), legacyGoal, "archive must be byte-identical");
+  assert.equal(await readFile(join(root, ".memory", "archive", "legacy", "index.md"), "utf8"), legacyIndex);
+  assert.match(await readFile(join(root, ".memory", "index.md"), "utf8"), /memory_version: "0.3"/);
+  assert.equal(typeof await readFile(join(root, ".memory", "conventions.md"), "utf8"), "string");
+  assert.equal(typeof await readFile(join(root, ".memory", "decisions", "index.md"), "utf8"), "string");
+  const log = await readFile(join(root, ".memory", "log.md"), "utf8");
+  assert.match(log, /Migrated memory 0\.1 → 0\.3/);
+  assert.match(log, /Legacy entry\./, "existing history must be kept");
 
-  // Post-migration validation succeeds
-  validation = await validateBundle(root);
-  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+  const again = await migrateBundle(root);
+  assert.equal(again.changes.length, 0, "migration must be idempotent");
+  await assert.rejects(() => applyMemoryPlan(root, {
+    approved: true,
+    approvalReason: "tamper",
+    operations: [{ action: "update_frontmatter", path: "archive/legacy/goal.md", values: { status: "x" } }],
+  }), /read-only/);
 });
 
-test("0.2 migration shifts legacy subfolder goal, progress, tasks into agents.md and logs event", async (t) => {
+test("migration rebuilds 0.2 scope agents.md into a brief and archives the original", async (t) => {
   const root = await temporaryProject(true);
   t.after(() => rm(root, { recursive: true, force: true }));
-
   const scope = "apps/api/src/domains/user";
   await initializeBundle(root, [scope]);
+  const memory = join(root, ".memory");
+  const scopeDir = join(memory, scope);
 
-  // Simulate legacy bundle: remove agents.md, put goal.md, progress.md, tasks.md, index.md in subfolder
-  const scopeDir = join(root, ".memory", scope);
-  await rm(join(scopeDir, "agents.md"), { force: true });
+  // Recreate a 0.2 layout on top of the fresh bundle.
+  await writeFile(join(memory, "index.md"), updateMarkdownFrontmatter(await readFile(join(memory, "index.md"), "utf8"), { memory_version: "0.2" }));
+  await writeFile(join(memory, "tasks.md"), `---\ntype: Tasks\nscope: .\n---\n# Tasks\n\n## Active tasks (Do Now)\n1. [ ] Something\n`);
+  const legacyAgents = `---\ntype: Agents\ntitle: User agents\ndescription: Combined agent instructions.\nscope: ${scope}\nstatus: active\ngovernance: hold\ngovernance_reason: Frozen for audit\n---\n# User Agents\n\n## Scope Architecture & Summary\n\nProfile service.\n\n## Goal & Requirements\n\n### Acceptance criteria\n- AC-001: Save works.\n\n## Tasks & Action Items\n\n### Active tasks (Do Now)\n1. [ ] Avatar upload\n`;
+  await writeFile(join(scopeDir, "agents.md"), legacyAgents);
+  await writeFile(join(scopeDir, "goal.md"), `---\ntype: Goal\nscope: ${scope}\nstatus: draft\n---\n# Goal\n`);
 
-  await writeFile(join(scopeDir, "goal.md"), `---
-type: Goal
-title: User Domain Goal
-description: User domain goal description.
-timestamp: 2026-01-01T00:00:00Z
-scope: ${scope}
-status: active
-provenance: observed
-uid: 00000000-0000-0000-0000-000000000010
----
-# User Domain Goal
-
-## Motivation
-Migrated user domain motivation.
-
-## Requirements
-- REQ-001: Support user profile edits.
-
-## Acceptance criteria
-- AC-001: Verified user profile save works.
-`);
-
-  await writeFile(join(scopeDir, "progress.md"), `---
-type: Progress
-title: User Domain Progress
-description: Progress for user domain.
-timestamp: 2026-01-01T00:00:00Z
-scope: ${scope}
----
-# User Domain Progress
-
-## Current state
-Profile editing in progress.
-
-## Blockers & drift
-none
-
-## Acceptance evidence
-| Criterion | Status | Evidence |
-|---|---|---|
-| AC-001 | verified | repo://apps/api/src/domains/user/profile.test.ts |
-
-## Next action
-- **Action:** Add profile avatar upload
-- **File / Command:** Edit apps/api/src/domains/user/profile.ts
-- **Time estimate:** [20 min]
-- **Requirement:** REQ-001
-- **Likely files:** \`apps/api/src/domains/user/profile.ts\`
-- **Verification:** bun test
-- **Approval:** approved
-`);
-
-  await writeFile(join(scopeDir, "tasks.md"), `---
-type: Tasks
-title: User Domain Tasks
-description: Tasks for user domain.
-timestamp: 2026-01-01T00:00:00Z
-scope: ${scope}
----
-# Tasks
-
-## Single next action
-- **Action:** Add profile avatar upload
-- **File / Command:** Edit apps/api/src/domains/user/profile.ts
-- **Time estimate:** [20 min]
-- **Requirement:** REQ-001
-- **Likely files:** \`apps/api/src/domains/user/profile.ts\`
-- **Verification:** bun test
-- **Approval:** approved
-
-## Active tasks (Do Now)
-1. [ ] **Avatar upload** \`[20 min]\` (REQ-001) — Implement avatar endpoint
-`);
-
-  await writeFile(join(scopeDir, "index.md"), `# User Domain Index\n`);
-
-  // Validation must fail before migration due to root-only files in subfolder
-  let validation = await validateBundle(root);
-  assert.equal(validation.ok, false);
-  assert(validation.diagnostics.some((d) => d.code === "root-only-file"));
-
-  // Run migration
   const result = await migrateBundle(root);
   assert.equal(result.validation.ok, true, JSON.stringify(result.validation.diagnostics));
 
-  // Legacy files must be removed
+  assert.equal(await readFile(join(memory, "archive", "legacy", scope, "agents.md"), "utf8"), legacyAgents);
+  assert.equal(typeof await readFile(join(memory, "archive", "legacy", scope, "goal.md"), "utf8"), "string");
+  assert.equal(typeof await readFile(join(memory, "archive", "legacy", "tasks.md"), "utf8"), "string");
   assert.equal(await readIfExists(join(scopeDir, "goal.md")), undefined);
-  assert.equal(await readIfExists(join(scopeDir, "progress.md")), undefined);
-  assert.equal(await readIfExists(join(scopeDir, "tasks.md")), undefined);
-  assert.equal(await readIfExists(join(scopeDir, "index.md")), undefined);
+  assert.equal(await readIfExists(join(memory, "tasks.md")), undefined);
 
-  // agents.md must contain all shifted data
-  const agentsContent = await readFile(join(scopeDir, "agents.md"), "utf8");
-  assert.match(agentsContent, /Migrated user domain motivation/);
-  assert.match(agentsContent, /REQ-001: Support user profile edits/);
-  assert.match(agentsContent, /AC-001: Verified user profile save works/);
-  assert.match(agentsContent, /Profile editing in progress/);
-  assert.match(agentsContent, /repo:\/\/apps\/api\/src\/domains\/user\/profile\.test\.ts/);
-  assert.match(agentsContent, /Add profile avatar upload/);
-  assert.match(agentsContent, /Avatar upload/);
+  const rebuilt = await readFile(join(scopeDir, "agents.md"), "utf8");
+  assert.match(rebuilt, /## Map\nProfile service\./);
+  assert.doesNotMatch(rebuilt, /Acceptance criteria|Active tasks/);
+  const parsed = parseMarkdown(rebuilt);
+  assert.equal(parsed.data.governance, "hold", "governance must survive migration");
+  assert.equal(parsed.data.governance_reason, "Frozen for audit");
 
-  // log.md must contain migration entry
-  const logContent = await readFile(join(scopeDir, "log.md"), "utf8");
-  assert.match(logContent, /Migration: Scope Restructure/);
-  assert.match(logContent, /Migrated legacy subfolder files/);
-
-  // Validation must pass cleanly
-  validation = await validateBundle(root);
-  assert.equal(validation.ok, true, JSON.stringify(validation.diagnostics));
+  // Archive is excluded from governance and search noise.
+  const governance = await checkPathGovernance(root, `${scope}/profile.ts`);
+  assert.equal(governance.governance, "hold");
+  assert(governance.governingDocuments.every((d) => !d.path.includes("/archive/")));
 });
-
-
-

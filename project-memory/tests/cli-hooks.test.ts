@@ -54,12 +54,11 @@ test("CLI initializes, validates, reports status, and supports plan files", asyn
   assert.equal(JSON.parse(output.pop()!).initialized, true);
   assert.equal(await runCli(["status", "--root", root, "--toon"], io), 0, errors.join("\n"));
   const toonStatus = output.pop()!;
-  assert.match(toonStatus, /^init:true\|root:/);
+  assert.match(toonStatus, /^init:true\|version:0\.3\|scopes:1/);
   assert.equal(await runCli(["context", "--root", root], io), 0, errors.join("\n"));
   const cliContext = output.pop()!;
   assert.match(cliContext, /\[PROJECT MEMORY\]/);
-  assert.match(cliContext, /ACTIVE INDEX/);
-  assert.doesNotMatch(cliContext, /ACTIVE GOAL/);
+  assert.match(cliContext, /\nINDEX\n/);
   assert.equal(await runCli(["context", "--root", root, "--json"], io), 0, errors.join("\n"));
   const cliJsonContext = JSON.parse(output.pop()!);
   assert.match(cliJsonContext.context, /\[PROJECT MEMORY\]/);
@@ -88,10 +87,44 @@ test("CLI initializes, validates, reports status, and supports plan files", asyn
   await writeFile(planPath, JSON.stringify({
     approved: true,
     approvalReason: "Explicit test approval",
-    operations: [{ action: "update_frontmatter", path: "goal.md", values: { status: "interviewing" } }],
+    operations: [{ action: "update_frontmatter", path: "conventions.md", values: { description: "Approved conventions summary." } }],
   }));
   assert.equal(await runCli(["apply", "--root", root, "--plan-file", planPath, "--json"], io), 0, errors.join("\n"));
   assert.equal(JSON.parse(output.pop()!).validation.ok, true);
+});
+
+test("CLI log and decide commands write, filter, and gate semantic entries", async (t) => {
+  const root = await temporaryProject();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const output: string[] = [];
+  const errors: string[] = [];
+  const io = { stdout: (text: string) => output.push(text), stderr: (text: string) => errors.push(text) };
+  assert.equal(await runCli(["init", "--root", root, "--json"], io), 0, errors.join("\n"));
+  output.pop();
+
+  assert.equal(await runCli(["log", "--add", "--root", root, "--type", "fix", "--title", "Fixed race", "--summary", "Mutex on refresh", "--files", "src/a.ts", "--json"], io), 0, errors.join("\n"));
+  output.pop();
+  assert.equal(await runCli(["log", "--add", "--root", root, "--type", "decision", "--title", "Unapproved"], io), 1);
+  assert.match(errors.pop()!, /pass --approval/);
+
+  assert.equal(await runCli(["decide", "--root", root, "--title", "Use Zod", "--decision", "Validate input with Zod.", "--rejected", "Joi: heavier"], io), 1);
+  assert.match(errors.pop()!, /requires --approval/);
+  assert.equal(await runCli(["decide", "--root", root, "--title", "Use Zod", "--decision", "Validate input with Zod.", "--rejected", "Joi: heavier", "--approval", "User chose A"], io), 0, errors.join("\n"));
+  assert.match(output.pop()!, /Recorded D-001: Use Zod/);
+
+  assert.equal(await runCli(["decisions", "--root", root, "--json"], io), 0, errors.join("\n"));
+  assert.deepEqual(JSON.parse(output.pop()!).map((d: { id: string }) => d.id), ["D-001"]);
+  assert.equal(await runCli(["log", "--root", root, "--type", "fix", "--json"], io), 0, errors.join("\n"));
+  assert.deepEqual(JSON.parse(output.pop()!).map((e: { title: string }) => e.title), ["Fixed race"]);
+  assert.equal(await runCli(["log", "--root", root, "--recent", "2"], io), 0, errors.join("\n"));
+  const text = output.pop()!;
+  assert.match(text, /\[decision\] D-001 Use Zod/);
+  assert.match(text, /\[fix\] Fixed race/);
+
+  const index = await readFile(join(root, ".memory", "index.md"), "utf8");
+  assert.match(index, /\[D-001\]\(\/decisions\/D-001-use-zod\.md\) Use Zod/);
+  assert.match(index, /fix: Fixed race/);
+  assert.equal(await runCli(["validate", "--root", root, "--strict", "--json"], io), 0, errors.join("\n"));
 });
 
 test("CLI malformed plans fail with JSON-only errors", async (t) => {
@@ -170,7 +203,7 @@ test("Antigravity hooks inject bounded context and a non-looping stale reminder"
   const post = await runHook("post-invocation", input);
   const postSteps = post.injectSteps as Array<{ ephemeralMessage: string }>;
   assert.equal(postSteps.length, 1);
-  assert.match(postSteps[0].ephemeralMessage, /Repository state changed/);
+  assert.match(postSteps[0].ephemeralMessage, /Repository changed/);
   assert.equal(post.terminationBehavior, "");
 
   const unchanged = await runHook("post-invocation", { ...input, invocationNum: 1 });
@@ -192,12 +225,12 @@ test("Antigravity finds memory from a nested Git workspace", async (t) => {
   assert.match((result.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage, /PROJECT MEMORY/);
 });
 
-test("Antigravity context injects root index only and ignores oversized goal and progress", async (t) => {
+test("Antigravity context injects root index only and ignores oversized documents", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
   await initializeBundle(root);
-  await writeFile(join(root, ".memory", "goal.md"), `GOAL START\n${"g".repeat(20_000)}\nGOAL END`);
-  await writeFile(join(root, ".memory", "progress.md"), `PROGRESS START\n${"p".repeat(20_000)}\nNEXT ACTION: verify tail`);
+  await writeFile(join(root, ".memory", "conventions.md"), `CONVENTIONS START\n${"g".repeat(20_000)}`);
+  await writeFile(join(root, ".memory", "log.md"), `LOG START\n${"p".repeat(20_000)}`);
   const result = await runHook("pre-invocation", {
     workspacePaths: [root],
     artifactDirectoryPath: join(root, ".artifacts"),
@@ -205,9 +238,9 @@ test("Antigravity context injects root index only and ignores oversized goal and
   });
   const message = (result.injectSteps as Array<{ ephemeralMessage: string }>)[0].ephemeralMessage;
   assert.match(message, /\[PROJECT MEMORY\]/);
-  assert.match(message, /ACTIVE INDEX/);
-  assert.doesNotMatch(message, /GOAL START/);
-  assert.doesNotMatch(message, /PROGRESS START/);
+  assert.match(message, /\nINDEX\n/);
+  assert.doesNotMatch(message, /CONVENTIONS START/);
+  assert.doesNotMatch(message, /LOG START/);
   assert(Buffer.byteLength(message, "utf8") <= 6_000);
 
   // When root index exceeds budget, returns structured error instead of truncated markdown
@@ -240,7 +273,7 @@ test("Antigravity notices repeated edits to an already dirty Git file", async (t
   assert.equal(((await runHook("post-invocation", { ...input, invocationNum: 1 })).injectSteps as unknown[]).length, 1);
 });
 
-test("CLI migrate command upgrades legacy 0.1 bundle to 0.2", async (t) => {
+test("CLI migrate command upgrades legacy 0.1 bundle to 0.3", async (t) => {
   const root = await temporaryProject();
   t.after(() => rm(root, { recursive: true, force: true }));
 
@@ -322,12 +355,13 @@ scope: .
   // Dry run
   assert.equal(await runCli(["migrate", "--dry-run", "--root", root, "--json"], io), 0, errors.join("\n"));
   const dryResult = JSON.parse(output.pop()!);
-  assert.equal(dryResult.version, "0.2");
+  assert.equal(dryResult.version, "0.3");
+  assert.ok(dryResult.archived.includes(".memory/tasks.md"));
 
   // Real migration
   assert.equal(await runCli(["migrate", "--root", root, "--json"], io), 0, errors.join("\n"));
   const migResult = JSON.parse(output.pop()!);
-  assert.equal(migResult.version, "0.2");
+  assert.equal(migResult.version, "0.3");
   assert.equal(migResult.validation.ok, true);
 
   // Validate

@@ -76,17 +76,19 @@ async function safeRead(path, root) {
   return readFile(canonical, "utf8");
 }
 
-function activeScope(index) {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(index)?.[1] ?? "";
-  const match = /^active_scope:\s*(?:["']([^"']+)["']|([^\s#]+))\s*$/m.exec(frontmatter);
-  const scope = (match?.[1] ?? match?.[2] ?? ".").trim();
-  if (scope === ".") return scope;
-  if (!/^[a-zA-Z0-9._/-]+$/.test(scope) || scope.startsWith("/") || scope.split("/").includes("..")) return ".";
-  return scope;
-}
+// Keep byte-identical with MEMORY_CONTEXT_PREAMBLE / MAINTENANCE_REMINDER in src/bundle.ts (tested).
+const MEMORY_CONTEXT_PREAMBLE = `[PROJECT MEMORY] Router below. Load on demand only; never read .memory/ in bulk.
+- Before editing a file: \`memory check --for-path <file>\` → open only the docs it lists. governance: hold → stop, ask user.
+- Before proposing a design: \`memory decisions\` → open only the relevant D-NNN file. Do not contradict accepted decisions silently.
+- Recent context: \`memory log --recent 10\` (filter: --type decision|fix|finding).
+- Anything else: \`memory search <keywords>\` → open the top hit only.
+- Changing decisions, conventions, scope rules, or architecture: present 2-3 options, mark one (Recommended), wait for explicit approval.
+- After meaningful work: \`memory log --add\` one concise entry (change|fix|finding|decision|correction).`;
+
+const MAINTENANCE_REMINDER = "[PROJECT MEMORY] Repository changed. Before handoff, log one concise entry per meaningful change (`memory log --add --type change|fix|finding`). If a durable choice was made, ask the user (2-3 options, one Recommended) before `memory decide`. Update only the one owning doc if a rule, pitfall, or architecture fact changed.";
 
 function formatMemoryContext(indexContent) {
-  return `[PROJECT MEMORY] (ON-DEMAND RETRIEVAL ONLY)\nPersistent project truth is in .memory/. DO NOT load all memory files into context!\nLoad ONLY the single relevant document required for your specific task:\n• Need next action: Read .memory/tasks.md (or active scope's agents.md).\n• Editing code: Run \`memory check --for-path <file>\` to discover the exact governing Flow/agents.md.\n• Domain logic: Read .memory/architecture/domain/Flow.md (enforce DDD business invariants).\n• Verify work: Read .memory/progress.md.\n• Search memory: Run \`memory search <keywords>\` for targeted snippets instead of reading entire files.\nAsk rather than guess; semantic changes require explicit user approval. Detailed memory is loaded strictly on demand.\n\nACTIVE INDEX\n${indexContent}`;
+  return `${MEMORY_CONTEXT_PREAMBLE}\n\nINDEX\n${indexContent}`;
 }
 
 function formatMemoryBudgetError(path, byteLength, budget) {
@@ -309,7 +311,7 @@ async function postInvocation(input) {
   if (!previous?.fingerprint || previous.fingerprint === fingerprint) return { injectSteps: [], terminationBehavior: "" };
   return {
     injectSteps: [{
-      ephemeralMessage: "[PROJECT MEMORY MAINTENANCE] Repository state changed during this invocation. Before handoff, compare the affected work with approved goals and update progress, evidence, append-only history, source/topic pages, and exactly one next action per active unblocked scope. Ask before changing semantic intent.",
+      ephemeralMessage: MAINTENANCE_REMINDER,
     }],
     terminationBehavior: "",
   };

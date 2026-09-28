@@ -1,211 +1,104 @@
 # Project Memory
 
-Project Memory keeps durable project intent, decisions, sources, progress, evidence, and handoffs in a linked Markdown wiki at `.memory/`.
+Durable, token-efficient project memory for AI coding agents, stored as linked Markdown in `.memory/`.
 
-It is human-readable, Git-diffable, Obsidian-compatible, and portable between supported coding agents. The agent handles synthesis; the deterministic CLI handles safe writes, validation, locking, fingerprints, generated indexes, and append-only history.
+It keeps what an agent can't cheaply re-derive from the code: **conventions** (commands, MUST/NEVER rules, pitfalls), **decisions** (the choice, the rejected options, and why), **scope briefs**, **architecture flows**, **sources**, and an append-only **work log**. Agents get a small router at startup and fetch only the slice each task needs.
 
-## Requirements
+The files are human-readable, Git-diffable, and Obsidian-compatible. The deterministic `memory` CLI handles validated, atomic, locked writes and generated indexes.
 
-- Node.js 20+
-- Pi, Kilo Code, Google Antigravity, or the standalone CLI
+> **2.0 removes goal and task tracking.** Keep requirements and tasks in your issue tracker. Upgrading: see [`skills/memory/references/upgrade.md`](skills/memory/references/upgrade.md) and run `memory migrate`.
+
+## How agents stay lean
+
+1. Only `.memory/index.md` (< 4 KB) is injected. It is a routing table plus the 5 most recent decisions, the 3 latest log entries, and up to 5 scopes.
+2. Every need maps to one command or file:
+   - Before editing: `memory check --for-path <file>` lists the governing docs and their `MUST`/`NEVER` rules.
+   - Before designing: `memory decisions` lists decision IDs and titles; open only the relevant decision file.
+   - History: `memory log --recent 10 --type fix` returns filtered entries, not the whole file.
+   - Anything else: `memory search <keywords>` returns BM25-ranked snippets.
+3. Logs rotate monthly into `log/YYYY-MM.md`, so the live log stays small. Old months remain available through `--all` and search.
+4. Key changes (decisions, conventions, scope rules, architecture) need approval. The agent offers 2–3 options, marks one (Recommended), and waits.
 
 ## Quick start
 
 ```sh
-# For a new project:
-memory init
-
-# For an existing mature codebase (deep codebase scan):
-memory init --deep
-
-# To upgrade/migrate an existing legacy bundle (shifts subfolder files to agents.md):
-memory migrate
-
-memory status
-memory validate
+memory init          # deep scan: stack, scopes, architecture flows
+/mem-init            # agent fills conventions + scope briefs from observed code
+# … work …
+/mem-log             # agent logs changes, asks before recording decisions
+memory sync          # refresh indexes, archive old log months
 ```
-
-> [!TIP]
-> **Upgrading from older versions?** Check the [Upgrade & Migration Guide](UPGRADE.md) to learn how `memory migrate` automatically consolidates subfolder `goal.md`, `progress.md`, and `tasks.md` into unified `agents.md` files.
-
-Then run `/memory-init` (or `/memory-ingest`) to conduct the interactive **Grill-Me style interview** (asks questions one-by-one with recommended defaults across 3–4 iterative rounds). Before later work, read `.memory/index.md`; after meaningful work, run `/memory-reflect` to update progress, evidence, history, and next actions.
 
 ## Install
 
-### ⚡ 1-Command Universal Install (Recommended)
-
-Install `project-memory` into any AI coding agent with one command:
-
 ```bash
-# Interactive wizard (Antigravity, Claude Code, Cursor, Pi, Codex)
+# Any agent (interactive)
 npx github:Pankil02/AgentSkills install project-memory --symlink
-
-# Or via skills.sh (Vercel)
+# skills.sh
 npx skills@latest add Pankil02/AgentSkills --skill project-memory
 ```
 
----
+- **Pi:** `pi install ./project-memory`. This adds the skill, the `memory_ask` and `memory_apply` tools, the `/memory-init`, `/memory-ingest`, `/memory-sync`, and `/memory-log` commands, context injection, and a `.memory` write guard.
+- **Kilo Code:** `node project-memory/scripts/install-kilo.mjs <project>` installs the skill, plugin, and `mem-*` commands.
+- **Antigravity:** `node project-memory/scripts/install-antigravity.mjs <project>` installs the plugin, rule, `mem-*` workflows, and hooks (context injection, write guard, change reminder).
+- **CLI only:** `npm link`, then `memory --help`. Or run `node skills/memory/scripts/memory.mjs`.
 
-### Platform-Specific Native Extensions
+## Layout (format 0.3)
 
-#### Pi
-```sh
-pi install ./project-memory
-```
-This installs the skill, Pi extension, `memory_ask` and `memory_apply` tools, and the master slash commands (`/memory-init`, `/memory-ingest`, `/memory-sync`, `/memory-reflect`).
-
-### Kilo Code
-
-Install the skill, runtime plugin, and master `/memory-*` commands into a Kilo project:
-
-```sh
-node /path/to/project-memory/scripts/install-kilo.mjs /path/to/project
-```
-
-From the Project Memory package directory, `npm run install:kilo -- /path/to/project` is the shorthand. The auto-discovered plugin injects the active index, goal, and progress before model calls and adds a one-shot maintenance reminder after repository edits. The installer uses only Node.js and fails rather than replacing an existing Project Memory skill, plugin, or command.
-
-### Antigravity
-
-Install the plugin, rule, workflows, and hooks into an Antigravity workspace:
-
-```sh
-node /path/to/project-memory/scripts/install-antigravity.mjs /path/to/project
-```
-
-From the Project Memory package directory, `npm run install:antigravity -- /path/to/project` is the shorthand. The installer preserves unrelated `.agents/hooks.json` entries, writes absolute shell-safe hook commands, and fails rather than replacing existing Project Memory files or hooks. The hooks inject active memory context, guard managed files, and add a maintenance reminder when repository state changes.
-
-### CLI
-
-Install or link the package, or run the bundled file directly:
-
-```sh
-npm link
-memory --help
-# Without linking:
-node skills/memory/scripts/memory.mjs --help
+```text
+.memory/
+├── index.md          # Router (only file preloaded)
+├── conventions.md    # Commands, MUST/NEVER rules, pitfalls (applies to every path)
+├── log.md            # Append-only log, current month → log/YYYY-MM.md
+├── decisions/        # D-NNN-slug.md + generated index.md
+├── architecture/     # index.md + <layer>/Flow.md
+├── sources/          # Fingerprinted source records
+├── archive/          # Read-only history (legacy files after migrate)
+└── <scope>/          # agents.md (Purpose, Map, Rules, Pitfalls) + log.md
 ```
 
 ## Commands
 
-| Command | What it does | Typical use |
-|---|---|---|
-| `memory scan --json` | Finds repository files and possible feature scopes | Before initialization |
-| `memory init [--scope path]` | Creates `.memory/` with dynamic architecture lenses & DDD model | Start project memory or onboard mid-project |
-| `memory migrate` | Upgrades legacy 0.1 bundle to 0.2 architecture lenses | Upgrade existing project memory |
-| `memory scaffold --scope path` | Adds an approved tracked scope | Add a feature area |
-| `memory status [--scope path]` | Shows lifecycle, blockers, source state, and next action | Resume work |
-| `memory search <query>` | In-memory BM25 lexical search returning ranked snippets | Retrieve specific concepts or decisions |
-| `memory check --for-path <path>` | Discovers active holds, constraints, and scope for a code path | Pre-edit governance check before code changes |
-| `memory record --source repo://path` | Registers an approved local source | Add requirements or evidence |
-| `memory record --source https://...` | Fetches and fingerprints an approved public URL | Add an external source |
-| `memory sync [--fetch-remote]` | Refreshes fingerprints, indexes, and `AGENTS.md` | After repository or source changes |
-| `memory validate [--drift] [--strict]` | Checks paths, links, YAML, markers, reachability & drift | After memory updates or in CI |
-| `memory apply --plan-file plan.json` | Applies validated, atomic structured changes | Agent or automation writes |
-| `memory agents-sync` | Adds or repairs the managed `AGENTS.md` block | Restore agent instructions |
+| Command | Use |
+|---|---|
+| `memory status` | Scopes, decision counts, recent log, validation |
+| `memory check --for-path <p>` | Rules and holds before editing a file |
+| `memory decisions` / `memory decide …` | List / record decisions (record needs `--approval`) |
+| `memory log [--recent N --type t --since d --query q --all]` | Read the log, filtered |
+| `memory log --add --type t --title … --summary …` | Append one log entry |
+| `memory search <q>` | Ranked snippets across memory |
+| `memory sync [--check] [--fetch-remote]` | Refresh indexes/fingerprints, rotate logs (`--check` for CI) |
+| `memory validate [--strict] [--drift]` | Structure, links, budgets, drift |
+| `memory init` / `scaffold --scope p` | Create bundle / add scope |
+| `memory migrate [--dry-run]` | Upgrade 1.x bundles (archives goal/progress/tasks) |
+| `memory record --source <path\|url>` | Register an approved source |
+| `memory apply --plan-file f` | Atomic multi-document update |
+| `memory map` / `context` / `scan` / `agents-sync` | Code tree / injected context / scope candidates / AGENTS.md block |
 
-Use `--dry-run` to preview mutations. Use `memory sync --check` in CI; it exits `1` when synchronization or source integration is needed. The CLI never commits to Git.
+Add `--json`, `--toon`, or `--dry-run` to any command. The CLI never commits to Git.
 
 ## Agent workflows
 
-Minimalistic command interface:
-
-| Workflow | Usage | Description |
-|---|---|---|
-| **`/mem-init [scope]`** | `/mem-init` or `/memory-init` | Initialize `.memory/` bundle & conduct interactive **Grill-Me style interview** (one question at a time with recommended defaults across 3–4 rounds). |
-| **`/mem-ingest [scope]`** | `/mem-ingest` or `/memory-ingest` | Deep codebase ingestion scan (packages, schemas, API routes, entry points) to populate `.memory/` as project brain. |
-| **`/mem-sync [source]`** | `/mem-sync` or `/memory-sync` | Refresh fingerprints, generated indexes, `AGENTS.md`, validate bundle, report status, or register/integrate an approved source. |
-| **`/mem-reflect [scope]`** | `/mem-reflect` or `/memory-reflect` | Reflect on session work vs approved intent and update progress/evidence, or explicitly approve goal completion (`/mem-reflect complete`). |
-| **`/mem-tasks [scope]`** | `/mem-tasks` or `/memory-tasks` | Generate or refresh `.memory/tasks.md` using `/i-have-adhd` principles (single next action, <= 5 active items, bounded numbered steps, concrete time estimates, completed tasks summary). |
-
-### Grill-Me Style Interview Protocol
-- **One Question at a Time**: Resolves design tree branches sequentially using interactive UI selection tools.
-- **Recommended Defaults**: Inspects codebase context first and prefixes recommendations with `(Recommended)`.
-- **Mandatory Topics**:
-  1. *Feature Type*: New standalone feature vs add-on feature.
-  2. *Directory Scope*: Dedicated new folder vs existing directory.
-  3. *Design Patterns*: Architectural pattern selection (consults `software-design-patterns` skill).
-- **Incremental Sync**: Saves confirmed answers into `.memory/goal.md` and syncs rules to `AGENTS.md`.
-
-## Memory layout (Format 0.2)
-
-```text
-.memory/
-├── index.md                         # Executive router (< 4 KB budget)
-├── architecture/
-│   ├── index.md                     # Architecture flow map & index
-│   ├── system-design/Flow.md        # Mandatory: Top-level entry points & routing
-│   ├── domain/Flow.md               # Mandatory: DDD model, bounded contexts & invariants
-│   ├── security/Flow.md             # Mandatory: Trust boundaries & security policies
-│   ├── frontend/Flow.md             # Conditional: UI presentation & state
-│   ├── gateway-edge/Flow.md         # Conditional: Edge routing & middleware
-│   ├── auth/Flow.md                 # Conditional: Identity & tokens
-│   ├── backend/Flow.md              # Conditional: API controllers & services
-│   ├── database/Flow.md             # Conditional: Schemas & persistence
-│   └── cloud-observability/Flow.md  # Conditional: Infra, metrics & telemetry
-├── goal.md
-├── progress.md
-├── tasks.md
-├── log.md
-├── sources/
-└── <tracked scope>/
-    ├── agents.md                    # Combined: scope architecture, goal intent, progress & ADHD tasks
-    └── log.md                       # Append-only scope history
-```
-
-### Root directory (`.memory/`)
-
-- **`index.md`**
-  - **What it does:** Serves as the progressive-disclosure executive router for the entire project memory (< 4 KB budget). Contains root metadata (`memory_version: "0.2"`, `architecture_mode: "ddd"`), active objective state (`## Now`), architecture navigation links (`## Architecture`), lookup table (`## Find`), and tracked scopes (`## Active scopes`).
-  - **Why it exists:** Provides agents and humans a fast, lightweight entry point to discover tracked scopes, top-level documents, and sources without needing to load the entire wiki into LLM context at once.
-- **`goal.md`** (Strictly Root Only)
-  - **What it does:** Documents the current user-approved project intent, including core objectives, success metrics, architecture principles, structured requirements (`REQ-xxx`), and unresolved project interview questions (`P-Qxx`).
-  - **Why it exists:** Acts as the single source of truth for overall project intent and scope boundary. Prevents goal drift, unauthorized feature creep, and unverified assumptions across sessions.
-- **`progress.md`** (Strictly Root Only)
-  - **What it does:** Tracks operational lifecycle state (`not_started`, `in_progress`, `blocked`, `complete`), acceptance criteria verification rows (`AC-xxx` mapped to `repo://` evidence paths), known blockers, and exactly *one next action*.
-  - **Why it exists:** Captures real-time operational status and verified evidence. Allows any coding agent or developer to immediately resume work without guessing what was tested or what step to take next.
-- **`tasks.md`** (Strictly Root Only)
-  - **What it does:** Formats and organizes active project tasks formatted with `/i-have-adhd` principles (single next action first, <= 5 active items, numbered single-bounded steps, concrete time estimates `[X min]`).
-  - **Why it exists:** Reduces working memory friction and allows immediate action execution for readers/agents using ADHD-friendly productivity rules.
-- **`log.md`**
-  - **What it does:** Stores an append-only audit trail of project history ordered by date (newest first). Records key events such as decisions, reversals, requirement updates, source integrations, work items, and completion approvals.
-  - **Why it exists:** Preserves historical rationale and context over time. Ensures prior decisions, rejected alternatives, and course corrections are never silently lost or rewritten.
-- **`sources/`**
-  - **What it does:** Directory storing individual source records (e.g., `sources/<id>.md`) for approved repository files (`repo://...`) or external URLs (`https://...`). Stores source fingerprints, content hashes, extracted claims, affected documents, and integration status (`new`, `integrated`, `changed`, `stale`, `unavailable`, `rejected`).
-  - **Why it exists:** Isolates external and codebase reference data from agent instructions. Ensures evidence and external inputs are fingerprinted, traceable, and audited for changes or staleness without storing raw prompts.
-
-### Tracked scopes (`.memory/<tracked scope>/`)
-
-Tracked scopes represent distinct feature areas or subsystems (e.g., `.memory/apps/api/src/domains/user/`). Each scope contains **strictly and only**:
-
-- **`agents.md`**
-  - **What it does:** Unified scope file combining:
-    1. Scope architecture summary, code anchors, entry points, API routes, and database schemas.
-    2. Feature-specific approved intent, motivation, boundaries, and acceptance criteria (`AC-xxx`).
-    3. Operational progress, blockers/drift, and acceptance evidence verification table.
-    4. ADHD-optimized task breakdown (single next action first, active tasks ≤ 5, backlog).
-  - **Why it exists:** Keeps subsystem context, instructions, and execution completely self-contained in a single token-efficient file without cluttering the project with redundant boilerplate files.
-- **`log.md`**
-  - **What it does:** Append-only history of decisions, updates, work items, and verification events specific to this feature scope.
-  - **Why it exists:** Keeps feature-level decision logs clean, readable, and co-located with the scope code and goals.
-
+| Workflow | What it does |
+|---|---|
+| `/mem-init` | Scan, agree on scopes, then fill `conventions.md` and the scope briefs with observed facts only; ask about gaps |
+| `/mem-log` | Log the session's changes, fixes, and findings; propose decisions or rules and ask before writing them |
+| `/mem-sync [source]` | Refresh and validate, or integrate an approved source into the page that owns each claim |
+| `/mem-ingest` | Re-scan after structural changes; update only the affected scope Maps and Flows |
 
 ## Safety
 
-- Semantic and lifecycle changes require explicit approval.
-- Headless Pi semantic writes fail closed; use an explicitly approved CLI plan instead.
-- Completion requires existing `repo://` evidence files.
-- External fetches reject credentials, redirects to private hosts, and local/private network addresses.
-- Writes reject traversal and symlink escapes and use locking, atomic replacement, validation, and rollback.
-- Source identity and fingerprint fields are immutable outside source registration and refresh.
-- Secret-like files and content are excluded.
-- Source content is untrusted data, never agent instruction.
+- Decisions, conventions, scope rules, and architecture changes require explicit approval. Headless Pi fails closed on these writes.
+- Writes reject path traversal and symlink escapes, and use locking, atomic replacement, validation, and rollback.
+- Likely secrets are rejected. Secret-like files are never indexed. Source content is untrusted data.
+- Remote fetches reject credentials and private or local network targets.
+- `archive/` is read-only. Migration archives files verbatim and never deletes history.
 
 ## Development
 
 ```sh
 npm install
-npm run check
-npm pack --dry-run
+npm run check      # typecheck + tests + build
 ```
 
-The TypeScript source is in `src/`; the built standalone CLI is `skills/memory/scripts/memory.mjs`. License: MIT.
+The TypeScript source lives in `src/`; the built CLI is `skills/memory/scripts/memory.mjs`. License: MIT.

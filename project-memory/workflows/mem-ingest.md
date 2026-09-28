@@ -1,15 +1,10 @@
-# Deep Codebase Ingestion & Onboarding
+# Re-scan Codebase into Project Memory
 
-Perform a comprehensive, deep-dive scan of an existing or mid-project codebase to populate `.memory/` as a complete project brain.
+Refresh observed facts after the codebase has grown or changed shape.
 
-1. Activate the `project-memory` skill and read its initialization instructions.
-2. Execute `memory init --deep` (or run Node on `scripts/memory.mjs init --deep`).
-3. The deep scanner will automatically inspect:
-   - Directory structure & monorepo packages (`apps/*`, `packages/*`, `src/features/*`).
-   - Project manifests (`package.json`, `turbo.json`, `tsconfig.json`, `pyproject.toml`, `Cargo.toml`, etc.).
-   - Database schemas & models (Prisma, Drizzle, SQLAlchemy, migrations, SQL files).
-   - Primary entry points & API route surfaces (`app/api`, `routes`, `controllers`).
-   - Environment variable names (`.env.example`) without secret values.
-4. Review generated `.memory/goal.md` and `.memory/index.md` for completeness and high token efficiency.
-5. If the project goal is still in `draft` state, conduct the onboarding project interview.
-6. Run `memory validate` to confirm wiki health.
+1. Load the `project-memory` skill.
+2. Run `memory init` (idempotent: it adds missing files and never overwrites existing ones), then `memory sync --json`.
+3. Read the `changedPaths` and `affectedScopes` in the output. For each affected scope, open only its `agents.md` and update Map if entry points, routes, or schemas moved.
+4. Stale architecture flows (the `stale-flow-fingerprint` / `stale-repo-path` warnings from `memory validate`): update only the affected `Flow.md`.
+5. New top-level areas found? Propose tracking them (2-3 options, one Recommended) before `memory scaffold --scope <path>`.
+6. Log one entry: `memory log --add --type finding --title "Re-scanned codebase" --summary "<what moved>"`.
