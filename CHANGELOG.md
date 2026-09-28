@@ -20,6 +20,15 @@ npx github:Pankil02/AgentSkills update             # apply (old copies backed up
 
 ---
 
+## [1.3.0] — 2026-09-28
+
+### `plan-walkthrough` 1.0.0 (new skill, non-breaking)
+- Plans only: investigates code, records decisions with rejected alternatives, saves plan to `docs/plans/`, replies with a short walkthrough + copy-paste handoff prompt for a fresh agent chat.
+- **Migration:** none. Install: `npx github:Pankil02/AgentSkills install plan-walkthrough`.
+
+### `project-memory` 1.4.0, `software-design-patterns` 2.0.0
+- No change.
+
 ## [1.2.0] — 2026-09-27
 
 ### Added

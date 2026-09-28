@@ -44,6 +44,9 @@ AgentSkills/
 │   ├── SKILL.md                    # Enforced rules, router table, red flags (~90 lines)
 │   ├── README.md                   # User-facing overview
 │   └── references/                 # solid, creational, structural, behavioral, decisions, architecture
+├── plan-walkthrough/               # Skill: deep plan → docs/plans/ + walkthrough + handoff prompt
+│   ├── SKILL.md                    # Investigate → decide → write plan → reply contract
+│   └── README.md                   # User-facing overview
 ├── tests/
 │   └── cli.test.js                 # Automated unit & integration test suite (node:test)
 └── .github/
@@ -180,3 +183,7 @@ node bin/cli.js install all --scope project --symlink --yes
 ### `software-design-patterns`
 - **Goal**: Enforce SOLID and the correct GoF/architecture pattern per use case, without overengineering.
 - **Primary Agent Command**: Apply SOLID to all touched code; match the code symptom in the `SKILL.md` router; try the baseline (function/map/enum/composition) first; load only the one `references/<category>.md` needed; flag missing and unearned patterns in review.
+
+### `plan-walkthrough`
+- **Goal**: Produce a deep, latency-aware implementation plan without touching code, then hand off to a fresh agent.
+- **Primary Agent Command**: Investigate real code first; for each decision record chosen vs rejected (flaw) and why; save plan to `docs/plans/YYYY-MM-DD-<slug>.md`; reply with a ≤40-line walkthrough (design, decisions, code structure, files, latency/risks), the plan path, and a copy-paste handoff prompt.
