@@ -214,7 +214,7 @@ export interface SourceFingerprint {
   content?: string;
 }
 
-function normalizeRelative(path: string): string {
+export function normalizeRelative(path: string): string {
   return path.split(sep).join("/").replace(/^\.\//, "");
 }
 
@@ -752,7 +752,20 @@ export async function deepScanRepository(root: string, baseScan?: RepositoryScan
       configFiles.add(path);
       if (!monorepo) monorepo = "pnpm Workspaces";
       packageManager = "pnpm";
-    } else if (base === "biome.json") configFiles.add(path);
+    } else if (base === "biome.json") {
+      configFiles.add(path);
+    } else if (base === "cargo.toml" && path === "Cargo.toml") {
+      configFiles.add(path);
+      try {
+        const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
+        if (/\[workspace\]/m.test(raw)) {
+          monorepo = "Cargo Workspace";
+          buildSystem = "Cargo";
+        }
+      } catch {
+        // Ignore read errors
+      }
+    }
     else if (base.startsWith(".eslintrc") || base === "eslint.config.js" || base === "eslint.config.mjs") configFiles.add(path);
     else if (base === "dockerfile" || base.startsWith("docker-compose")) infrastructure.add(path);
     else if (base === "fly.toml" || base === "render.yaml" || base === "vercel.json" || base === "netlify.toml" || base === "serverless.yml") infrastructure.add(path);
@@ -843,23 +856,41 @@ export async function deepScanRepository(root: string, baseScan?: RepositoryScan
   }
 
   for (const path of filePaths) {
-    if (path !== "package.json" && basename(path) === "package.json") {
+    const base = basename(path);
+    if (path !== base && (base === "package.json" || base === "Cargo.toml" || base === "pyproject.toml" || base === "go.mod")) {
       const dir = dirname(path);
       if (isExcludedPath(dir)) continue;
+      if (dir.startsWith("examples/") || dir.startsWith("docs/") || dir.startsWith("fixtures/")) continue;
       try {
         const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
-        const pkg = JSON.parse(raw);
-        packages.push({
-          path: dir,
-          name: pkg.name || basename(dir),
-          description: pkg.description,
-        });
+        let name: string | undefined;
+        let description: string | undefined;
+        if (base === "package.json") {
+          const pkg = JSON.parse(raw);
+          name = pkg.name;
+          description = pkg.description;
+        } else if (base === "Cargo.toml") {
+          const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+          if (match) name = match[1];
+        } else if (base === "pyproject.toml") {
+          const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+          if (match) name = match[1];
+        }
+        if (!packages.some((p) => p.path === dir)) {
+          packages.push({
+            path: dir,
+            name: name || basename(dir),
+            description,
+          });
+        }
       } catch {
-        packages.push({ path: dir, name: basename(dir) });
+        if (!packages.some((p) => p.path === dir)) {
+          packages.push({ path: dir, name: basename(dir) });
+        }
       }
     } else {
       const dir = dirname(path);
-      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/")) {
+      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/") || dir.startsWith("crates/")) {
         const parts = dir.split("/");
         if (parts.length >= 2) {
           const pkgPath = parts.slice(0, 2).join("/");
@@ -923,8 +954,31 @@ export async function scanRepository(root: string): Promise<RepositoryScan> {
   const projectRoot = await findProjectRoot(root);
   const files = await inventoryRepository(projectRoot);
   const [head, gitRepository] = await Promise.all([repositoryHead(projectRoot), isGitRepository(projectRoot)]);
+  const fingerprintParts = await Promise.all(
+    files.map(async (file) => {
+      if (file.path === "AGENTS.md") {
+        try {
+          const content = await readFile(resolve(projectRoot, file.path), "utf8");
+          const starts = content.indexOf("<!-- memory:start -->");
+          const ends = content.indexOf("<!-- memory:end -->");
+          let unmanaged = content;
+          if (starts !== -1 && ends !== -1 && ends >= starts) {
+            unmanaged = content.slice(0, starts) + content.slice(ends + "<!-- memory:end -->".length);
+          }
+          const trimmed = unmanaged.trim();
+          if (!trimmed) return null; // 100% generated block, exclude from source input fingerprint
+          const unmanagedHash = createHash("sha256").update(trimmed, "utf8").digest("hex");
+          return `${file.path}:unmanaged:${unmanagedHash}`;
+        } catch {
+          return `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`;
+        }
+      }
+      return `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`;
+    })
+  );
+
   const fingerprint = createHash("sha256")
-    .update(files.map((file) => `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`).join("\n"))
+    .update(fingerprintParts.filter((p): p is string => p !== null).sort().join("\n"))
     .digest("hex");
   return {
     projectRoot,

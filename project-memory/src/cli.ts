@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import {
   applyMemoryPlan,
   buildMemoryContext,
+  bundlePath,
   checkPathGovernance,
   discoverTrackedScopes,
   generateMemoryMap,
@@ -13,6 +14,7 @@ import {
   listDecisions,
   migrateBundle,
   parseMarkdown,
+  readIfExists,
   readLogEntries,
   recordDecision,
   recordEvent,
@@ -40,6 +42,19 @@ import {
   mapPathsToScopes,
   scanRepository,
 } from "./repository.ts";
+import { findRoute, type RouteResult } from "./routing.ts";
+import { evaluateEntryPointQuality } from "./entrypoint-quality.ts";
+import {
+  auditAgentsInstructions,
+  applyAgentsReviewPlan,
+  type AgentsAuditReport,
+  type AgentsReviewPlan,
+} from "./agents-review.ts";
+import {
+  planEntryPointMaintenance,
+  applyEntryPointMaintenance,
+  readExistingCatalog,
+} from "./maintenance.ts";
 
 interface ParsedArguments {
   command?: string;
@@ -65,6 +80,7 @@ Read (cheap, targeted):
   search <query>       BM25 search across .memory; returns ranked snippets
   context              Emit the exact context injected into agents
   map                  On-demand codebase treemap
+  route                Targeted task and path routing (--task, --for-path, --limit)
 
 Write (validated, atomic):
   log --add            Append a log entry (--type, --title, --summary, --files, --scope)
@@ -75,8 +91,8 @@ Write (validated, atomic):
   sync                 Refresh fingerprints/indexes, archive old log months
   init | scaffold      Create .memory or add tracked scopes (deep scan by default)
   migrate              Upgrade 0.1/0.2 bundles to 0.3 (archives goal/progress/tasks)
-  validate             Validate format, links, budgets, drift
-  agents-sync          Add or repair the managed AGENTS.md block
+  validate             Validate format, links, budgets, drift (--entrypoints, --quality)
+  agents-sync          Add or repair the managed AGENTS.md block (--check, --review)
   scan                 Inspect repository files and propose tracked scopes
 
 Common options:
@@ -84,6 +100,7 @@ Common options:
   --limit <n> / --recent <n>  --type <t> (repeatable)  --since YYYY-MM-DD  --query <text>
   --all (include archived log months)  --drift  --strict  --check  --fetch-remote
   --shallow  --budget <bytes>  --source <path|url>  --source-text[-file]  --plan[-file]  --event[-file]
+  --task <intent>  --entrypoints  --quality  --review
 `;
 
 function parseArguments(argv: string[]): ParsedArguments {
@@ -94,10 +111,15 @@ function parseArguments(argv: string[]): ParsedArguments {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
       "for-path": { type: "string" },
+      task: { type: "string" },
       query: { type: "string" },
       limit: { type: "string" },
       drift: { type: "boolean" },
       strict: { type: "boolean" },
+      entrypoints: { type: "boolean" },
+      quality: { type: "boolean" },
+      review: { type: "boolean" },
+      "apply-review": { type: "string" },
       budget: { type: "string" },
       deep: { type: "boolean" },
       shallow: { type: "boolean" },
@@ -221,6 +243,24 @@ export function formatToon(value: unknown): string {
     return `${head}\n${object.treemap}`;
   }
 
+  if ("matches" in object && "query" in object) {
+    const res = object as unknown as RouteResult;
+    const lines = [`route[scope|confidence|reason]:`];
+    for (const m of res.matches) {
+      lines.push(`  ${m.scope}|${m.confidence}|${m.reason}`);
+    }
+    return lines.join("\n");
+  }
+
+  if ("target" in object && "recommendedEdits" in object && "findings" in object) {
+    const res = object as unknown as AgentsAuditReport;
+    const lines = [`audit:${res.target}|bytes:${res.byteLength}|markers:${res.hasMarkers}`];
+    for (const f of res.findings) {
+      lines.push(`  [${f.severity}] ${f.code}: ${f.message}`);
+    }
+    return lines.join("\n");
+  }
+
   return Object.entries(object)
     .map(([k, v]) => (v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`))
     .join(" | ");
@@ -279,6 +319,28 @@ function summarize(value: unknown): string {
     if (res.constraints.length > 0) {
       lines.push(`Constraints & Invariants (${res.constraints.length}):`);
       for (const c of res.constraints) lines.push(`- ${c}`);
+    }
+    return lines.join("\n");
+  }
+
+  if ("matches" in object && "query" in object) {
+    const res = object as unknown as RouteResult;
+    const lines = [`Route for ${res.query.task ? `task "${res.query.task}"` : `path "${res.query.path}"`}:`];
+    for (const m of res.matches) {
+      lines.push(`- Scope: ${m.scope} [${m.confidence}] (${m.reason})`);
+      if (m.startPaths.length > 0) lines.push(`  Start: ${m.startPaths.join(", ")}`);
+      if (m.governingDocuments.length > 0) lines.push(`  Governing: ${m.governingDocuments.join(", ")}`);
+      if (m.verificationCommands.length > 0) lines.push(`  Verify: ${m.verificationCommands.map(c => c.argv.join(" ")).join("; ")}`);
+    }
+    if (res.fallback) lines.push(`Fallback: ${res.fallback.command} (${res.fallback.explanation})`);
+    return lines.join("\n");
+  }
+
+  if ("target" in object && "recommendedEdits" in object && "findings" in object) {
+    const res = object as unknown as AgentsAuditReport;
+    const lines = [`Audit for ${res.target} (${res.byteLength} bytes, markers: ${res.hasMarkers ? "valid" : "invalid"}):`];
+    for (const f of res.findings) {
+      lines.push(`- [${f.severity.toUpperCase()}] ${f.code}: ${f.message}`);
     }
     return lines.join("\n");
   }
@@ -378,6 +440,11 @@ export async function runCli(argv: string[], io: CliIO = {
         const scan = await scanRepository(root);
         const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        if (!dryRun) {
+          const plan = await planEntryPointMaintenance(root, "init");
+          const maintenanceChanges = await applyEntryPointMaintenance(root, plan);
+          initialized.changes.push(...maintenanceChanges);
+        }
         result = { ...initialized, candidates: scan.candidates };
         break;
       }
@@ -396,11 +463,14 @@ export async function runCli(argv: string[], io: CliIO = {
           const sources = await refreshRegisteredSources(root, { dryRun, fetchRemote: enabled(args, "fetch-remote") });
           const rotated = await rotateLogs(root, { dryRun });
           const changes = [...rotated, ...await syncIndexes(root, scan, { dryRun })];
-          const agents = await syncAgentsFile(root, { dryRun });
           const validation = await validateBundle(root);
-          return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes: [...changes, agents], validation };
+          return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes, validation };
         };
-        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        const syncRes = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        const plan = await planEntryPointMaintenance(root, "sync");
+        const maintenanceChanges = await applyEntryPointMaintenance(root, plan, { dryRun });
+        syncRes.changes.push(...maintenanceChanges);
+        result = syncRes;
         break;
       }
       case "status": {
@@ -551,15 +621,64 @@ export async function runCli(argv: string[], io: CliIO = {
         result = await checkPathGovernance(root, targetPath);
         break;
       }
+      case "route": {
+        const catalog = (await readExistingCatalog(root)) ?? (await planEntryPointMaintenance(root, "sync")).catalog;
+        const task = flag(args, "task");
+        const path = flag(args, "for-path") ?? args.positional[0];
+        const limitStr = flag(args, "limit");
+        const limit = limitStr ? Number.parseInt(limitStr, 10) : undefined;
+        result = findRoute(catalog, { task, path, limit });
+        break;
+      }
       case "validate": {
         const drift = enabled(args, "drift");
         const strict = enabled(args, "strict");
-        result = await validateBundle(root, { drift, strict });
+        const valRes = await validateBundle(root, { drift, strict });
+        if (enabled(args, "entrypoints") || enabled(args, "quality")) {
+          const catalog = await readExistingCatalog(root);
+          if (!catalog) {
+            valRes.ok = false;
+            valRes.diagnostics.push({ severity: "error", code: "missing-catalog", path: ".memory/.meta/entrypoints.json", message: "Entrypoint catalog is missing; run memory sync" });
+            result = valRes;
+          } else {
+            const agentsContent = await readIfExists(join(root, "AGENTS.md"));
+            const indexContent = await readIfExists(join(bundlePath(root), "index.md"));
+            const qualityReport = evaluateEntryPointQuality(catalog, { agentsContent, indexContent });
+            result = {
+              ...valRes,
+              entrypoints: {
+                catalogOk: true,
+                quality: qualityReport,
+              },
+            };
+            if (!qualityReport.passedSafetyGates || (strict && qualityReport.score < 90)) {
+              valRes.ok = false;
+            }
+          }
+        } else {
+          result = valRes;
+        }
         break;
       }
       case "agents-sync": {
-        const mutate = () => syncAgentsFile(root, { dryRun });
-        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        if (enabled(args, "review")) {
+          const catalog = await readExistingCatalog(root);
+          result = await auditAgentsInstructions(root, catalog);
+          break;
+        }
+        const plan = await planEntryPointMaintenance(root, "agents-sync");
+        const mutate = () => applyEntryPointMaintenance(root, plan, { dryRun });
+        result = await mutate();
+        break;
+      }
+      case "apply-review": {
+        const planPath = flag(args, "apply-review") ?? flag(args, "plan-file") ?? args.positional[0];
+        if (!planPath) throw new Error("apply-review requires plan file path");
+        const raw = await readFile(resolve(planPath), "utf8");
+        const plan = JSON.parse(raw) as AgentsReviewPlan;
+        const approval = flag(args, "approval");
+        if (!approval) throw new Error("apply-review requires --approval \"<user approval>\"");
+        result = await applyAgentsReviewPlan(root, plan, { approval, dryRun });
         break;
       }
       case "apply": {

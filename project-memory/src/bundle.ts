@@ -70,11 +70,14 @@ export interface ParsedMarkdown {
   errors: string[];
 }
 
+export type { RepositoryScan } from "./repository.ts";
+
 export interface FileChange {
   path: string;
   action: "create" | "update" | "skip";
   beforeHash?: string;
   afterHash?: string;
+  bytes?: number;
 }
 
 export interface InitResult {
@@ -252,7 +255,7 @@ export function parseMarkdown(content: string): ParsedMarkdown {
   return { data, body: match[2], document, hasFrontmatter: true, errors };
 }
 
-function serializeMarkdown(data: Record<string, unknown>, body: string): string {
+export function serializeMarkdown(data: Record<string, unknown>, body: string): string {
   const document = new Document(data);
   const yaml = document.toString({ lineWidth: 0 }).trimEnd();
   return `---\n${yaml}\n---\n${body.replace(/^\n+/, "").replace(/\s*$/, "")}\n`;
@@ -320,7 +323,7 @@ export function replaceGeneratedRegion(content: string, name: string, generated:
   return `${content.slice(0, start)}${replacement}${content.slice(end + endMarker.length)}`;
 }
 
-function bundlePath(projectRoot: string): string {
+export function bundlePath(projectRoot: string): string {
   return resolve(projectRoot, MEMORY_DIRECTORY);
 }
 
@@ -378,7 +381,7 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   await rename(temporary, path);
 }
 
-async function readIfExists(path: string): Promise<string | undefined> {
+export async function readIfExists(path: string): Promise<string | undefined> {
   try {
     return await readFile(path, "utf8");
   } catch (error) {
@@ -1130,7 +1133,7 @@ export async function discoverTrackedScopes(projectRoot: string): Promise<string
 
 /** Bundle-owned directories that are never tracked code scopes. */
 function isReservedBundleDirectory(memoryRoot: string, directory: string): boolean {
-  return ["architecture", "sources", DECISIONS_DIRECTORY, ARCHIVE_DIRECTORY]
+  return [".meta", "architecture", "sources", DECISIONS_DIRECTORY, ARCHIVE_DIRECTORY]
     .some((name) => isPathInside(join(memoryRoot, name), directory));
 }
 
@@ -1297,10 +1300,10 @@ export async function syncIndexes(projectRoot: string, scan?: RepositoryScan, op
         }
 
         const rootUpdates: Record<string, unknown> = {};
-        if (rootParsed.data.memory_version !== MEMORY_VERSION) rootUpdates.memory_version = MEMORY_VERSION;
-        if (rootParsed.data.architecture_mode !== "ddd") rootUpdates.architecture_mode = "ddd";
-        if (rootParsed.data.architecture_index !== "/architecture/") rootUpdates.architecture_index = "/architecture/";
-        if (rootParsed.data.system_flow !== "/architecture/system-design/Flow.md") rootUpdates.system_flow = "/architecture/system-design/Flow.md";
+        if (rootParsed.data.architecture_mode === "ddd") {
+          if (rootParsed.data.architecture_index !== "/architecture/") rootUpdates.architecture_index = "/architecture/";
+          if (rootParsed.data.system_flow !== "/architecture/system-design/Flow.md") rootUpdates.system_flow = "/architecture/system-design/Flow.md";
+        }
         if (scan && ((scan.head ?? null) !== rootParsed.data.repository_head || scan.fingerprint !== rootParsed.data.repository_fingerprint)) {
           rootUpdates.repository_head = scan.head ?? null;
           rootUpdates.repository_fingerprint = scan.fingerprint;
@@ -2027,7 +2030,7 @@ function resolveMemoryLink(memoryRoot: string, from: string, target: string): st
   return absolute;
 }
 
-async function exists(path: string): Promise<boolean> {
+export async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
@@ -2157,24 +2160,48 @@ export async function validateBundle(projectRoot: string, options?: ValidateOpti
     const parsed = parseMarkdown(rootIndex);
     if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "root-frontmatter", path: ".memory/index.md", message: parsed.errors.join("; ") || "Root index requires frontmatter" });
     else {
-      if (parsed.data.memory_version !== MEMORY_VERSION) diagnostics.push({ severity: "error", code: "version", path: ".memory/index.md", message: `Expected memory_version ${MEMORY_VERSION}` });
-      if (parsed.data.architecture_mode !== "ddd") diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd" });
-      if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
-      if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
+      if (parsed.data.memory_version !== MEMORY_VERSION && parsed.data.memory_version !== "0.4") {
+        diagnostics.push({ severity: "error", code: "version", path: ".memory/index.md", message: `Expected memory_version ${MEMORY_VERSION}` });
+      }
+      const archMode = typeof parsed.data.architecture_mode === "string" ? parsed.data.architecture_mode : "ddd";
+      if (!["ddd", "unconfirmed", "other"].includes(archMode)) {
+        diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd, unconfirmed, or other" });
+      }
+      if (archMode === "ddd") {
+        if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
+        if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
+      }
     }
   }
 
-  // Validate architecture index and mandatory flows
-  const archDir = join(memoryRoot, "architecture");
-  const archIndexPath = join(archDir, "index.md");
-  if (!(await exists(archIndexPath))) {
-    diagnostics.push({ severity: "error", code: "missing-architecture-index", path: ".memory/architecture/index.md", message: "Architecture index (/architecture/index.md) is required" });
+  // Validate entrypoint catalog if present
+  const metaPath = join(memoryRoot, ".meta", "entrypoints.json");
+  if (await exists(metaPath)) {
+    try {
+      const raw = await readFile(metaPath, "utf8");
+      const parsedJson = JSON.parse(raw);
+      if (!parsedJson || typeof parsedJson !== "object" || parsedJson.schemaVersion !== 1) {
+        diagnostics.push({ severity: "error", code: "invalid-catalog", path: ".memory/.meta/entrypoints.json", message: "Invalid entrypoint catalog schema" });
+      }
+    } catch {
+      diagnostics.push({ severity: "error", code: "invalid-catalog-json", path: ".memory/.meta/entrypoints.json", message: "Malformed entrypoint catalog JSON" });
+    }
   }
 
-  for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
-    const flowPath = join(archDir, layer, "Flow.md");
-    if (!(await exists(flowPath))) {
-      diagnostics.push({ severity: "error", code: "missing-mandatory-flow", path: `.memory/architecture/${layer}/Flow.md`, message: `Mandatory architecture flow ${layer}/Flow.md is required` });
+  // Validate architecture index and mandatory flows when architecture_mode is ddd
+  const archDir = join(memoryRoot, "architecture");
+  const archIndexPath = join(archDir, "index.md");
+  const currentArchMode = (rootIndex && parseMarkdown(rootIndex).data.architecture_mode) || "ddd";
+  if (currentArchMode === "ddd") {
+    if (!(await exists(archIndexPath))) {
+      diagnostics.push({ severity: "error", code: "missing-architecture-index", path: ".memory/architecture/index.md", message: "Architecture index (/architecture/index.md) is required" });
+    }
+
+    for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
+      const flowPath = join(archDir, layer, "Flow.md");
+      if (!(await exists(flowPath))) {
+        diagnostics.push({ severity: "error", code: "missing-mandatory-flow", path: `.memory/architecture/${layer}/Flow.md`, message: `Mandatory architecture flow ${layer}/Flow.md is required` });
+      }
     }
   }
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { readFile as readFile3 } from "node:fs/promises";
-import { basename as basename3, resolve as resolve3 } from "node:path";
+import { readFile as readFile5 } from "node:fs/promises";
+import { basename as basename5, join as join6, resolve as resolve6 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -6877,8 +6877,19 @@ async function deepScanRepository(root, baseScan) {
       configFiles.add(path);
       if (!monorepo) monorepo = "pnpm Workspaces";
       packageManager = "pnpm";
-    } else if (base === "biome.json") configFiles.add(path);
-    else if (base.startsWith(".eslintrc") || base === "eslint.config.js" || base === "eslint.config.mjs") configFiles.add(path);
+    } else if (base === "biome.json") {
+      configFiles.add(path);
+    } else if (base === "cargo.toml" && path === "Cargo.toml") {
+      configFiles.add(path);
+      try {
+        const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
+        if (/\[workspace\]/m.test(raw)) {
+          monorepo = "Cargo Workspace";
+          buildSystem = "Cargo";
+        }
+      } catch {
+      }
+    } else if (base.startsWith(".eslintrc") || base === "eslint.config.js" || base === "eslint.config.mjs") configFiles.add(path);
     else if (base === "dockerfile" || base.startsWith("docker-compose")) infrastructure.add(path);
     else if (base === "fly.toml" || base === "render.yaml" || base === "vercel.json" || base === "netlify.toml" || base === "serverless.yml") infrastructure.add(path);
     else if (path.startsWith(".github/workflows/")) infrastructure.add(path);
@@ -6952,23 +6963,41 @@ async function deepScanRepository(root, baseScan) {
     }
   }
   for (const path of filePaths) {
-    if (path !== "package.json" && basename(path) === "package.json") {
+    const base = basename(path);
+    if (path !== base && (base === "package.json" || base === "Cargo.toml" || base === "pyproject.toml" || base === "go.mod")) {
       const dir = dirname(path);
       if (isExcludedPath(dir)) continue;
+      if (dir.startsWith("examples/") || dir.startsWith("docs/") || dir.startsWith("fixtures/")) continue;
       try {
         const raw = await readFile(resolve(scan.projectRoot, path), "utf8");
-        const pkg = JSON.parse(raw);
-        packages.push({
-          path: dir,
-          name: pkg.name || basename(dir),
-          description: pkg.description
-        });
+        let name;
+        let description;
+        if (base === "package.json") {
+          const pkg = JSON.parse(raw);
+          name = pkg.name;
+          description = pkg.description;
+        } else if (base === "Cargo.toml") {
+          const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+          if (match) name = match[1];
+        } else if (base === "pyproject.toml") {
+          const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+          if (match) name = match[1];
+        }
+        if (!packages.some((p) => p.path === dir)) {
+          packages.push({
+            path: dir,
+            name: name || basename(dir),
+            description
+          });
+        }
       } catch {
-        packages.push({ path: dir, name: basename(dir) });
+        if (!packages.some((p) => p.path === dir)) {
+          packages.push({ path: dir, name: basename(dir) });
+        }
       }
     } else {
       const dir = dirname(path);
-      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/")) {
+      if (dir.startsWith("apps/") || dir.startsWith("packages/") || dir.startsWith("services/") || dir.startsWith("crates/")) {
         const parts = dir.split("/");
         if (parts.length >= 2) {
           const pkgPath = parts.slice(0, 2).join("/");
@@ -7028,7 +7057,29 @@ async function scanRepository(root) {
   const projectRoot = await findProjectRoot(root);
   const files = await inventoryRepository(projectRoot);
   const [head, gitRepository] = await Promise.all([repositoryHead(projectRoot), isGitRepository(projectRoot)]);
-  const fingerprint = createHash("sha256").update(files.map((file) => `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`).join("\n")).digest("hex");
+  const fingerprintParts = await Promise.all(
+    files.map(async (file) => {
+      if (file.path === "AGENTS.md") {
+        try {
+          const content = await readFile(resolve(projectRoot, file.path), "utf8");
+          const starts = content.indexOf("<!-- memory:start -->");
+          const ends = content.indexOf("<!-- memory:end -->");
+          let unmanaged = content;
+          if (starts !== -1 && ends !== -1 && ends >= starts) {
+            unmanaged = content.slice(0, starts) + content.slice(ends + "<!-- memory:end -->".length);
+          }
+          const trimmed = unmanaged.trim();
+          if (!trimmed) return null;
+          const unmanagedHash = createHash("sha256").update(trimmed, "utf8").digest("hex");
+          return `${file.path}:unmanaged:${unmanagedHash}`;
+        } catch {
+          return `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`;
+        }
+      }
+      return `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`;
+    })
+  );
+  const fingerprint = createHash("sha256").update(fingerprintParts.filter((p) => p !== null).sort().join("\n")).digest("hex");
   return {
     projectRoot,
     git: gitRepository,
@@ -8291,7 +8342,7 @@ async function discoverTrackedScopes(projectRoot) {
   return [...directories].sort((a, b) => a === "." ? -1 : b === "." ? 1 : a.localeCompare(b));
 }
 function isReservedBundleDirectory(memoryRoot, directory) {
-  return ["architecture", "sources", DECISIONS_DIRECTORY, ARCHIVE_DIRECTORY].some((name) => isPathInside(join2(memoryRoot, name), directory));
+  return [".meta", "architecture", "sources", DECISIONS_DIRECTORY, ARCHIVE_DIRECTORY].some((name) => isPathInside(join2(memoryRoot, name), directory));
 }
 async function generateDocumentsList(files, dir, pathPrefix, emptyMessage) {
   const directDocuments = files.filter((file) => dirname2(file) === dir && !RESERVED_FILES.has(basename2(file)));
@@ -8431,10 +8482,10 @@ async function syncIndexes(projectRoot, scan, options = {}) {
           content = replaceGeneratedRegion(content, "scopes", lines.join("\n") || "- Project root only.");
         }
         const rootUpdates = {};
-        if (rootParsed.data.memory_version !== MEMORY_VERSION) rootUpdates.memory_version = MEMORY_VERSION;
-        if (rootParsed.data.architecture_mode !== "ddd") rootUpdates.architecture_mode = "ddd";
-        if (rootParsed.data.architecture_index !== "/architecture/") rootUpdates.architecture_index = "/architecture/";
-        if (rootParsed.data.system_flow !== "/architecture/system-design/Flow.md") rootUpdates.system_flow = "/architecture/system-design/Flow.md";
+        if (rootParsed.data.architecture_mode === "ddd") {
+          if (rootParsed.data.architecture_index !== "/architecture/") rootUpdates.architecture_index = "/architecture/";
+          if (rootParsed.data.system_flow !== "/architecture/system-design/Flow.md") rootUpdates.system_flow = "/architecture/system-design/Flow.md";
+        }
         if (scan && ((scan.head ?? null) !== rootParsed.data.repository_head || scan.fingerprint !== rootParsed.data.repository_fingerprint)) {
           rootUpdates.repository_head = scan.head ?? null;
           rootUpdates.repository_fingerprint = scan.fingerprint;
@@ -9354,21 +9405,43 @@ async function validateBundle(projectRoot, options) {
     const parsed = parseMarkdown(rootIndex);
     if (!parsed.hasFrontmatter || parsed.errors.length > 0) diagnostics.push({ severity: "error", code: "root-frontmatter", path: ".memory/index.md", message: parsed.errors.join("; ") || "Root index requires frontmatter" });
     else {
-      if (parsed.data.memory_version !== MEMORY_VERSION) diagnostics.push({ severity: "error", code: "version", path: ".memory/index.md", message: `Expected memory_version ${MEMORY_VERSION}` });
-      if (parsed.data.architecture_mode !== "ddd") diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd" });
-      if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
-      if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
+      if (parsed.data.memory_version !== MEMORY_VERSION && parsed.data.memory_version !== "0.4") {
+        diagnostics.push({ severity: "error", code: "version", path: ".memory/index.md", message: `Expected memory_version ${MEMORY_VERSION}` });
+      }
+      const archMode = typeof parsed.data.architecture_mode === "string" ? parsed.data.architecture_mode : "ddd";
+      if (!["ddd", "unconfirmed", "other"].includes(archMode)) {
+        diagnostics.push({ severity: "error", code: "architecture-mode", path: ".memory/index.md", message: "Root index requires architecture_mode: ddd, unconfirmed, or other" });
+      }
+      if (archMode === "ddd") {
+        if (typeof parsed.data.architecture_index !== "string") diagnostics.push({ severity: "error", code: "architecture-index", path: ".memory/index.md", message: "Root index requires architecture_index" });
+        if (typeof parsed.data.system_flow !== "string") diagnostics.push({ severity: "error", code: "system-flow", path: ".memory/index.md", message: "Root index requires system_flow" });
+      }
+    }
+  }
+  const metaPath = join2(memoryRoot, ".meta", "entrypoints.json");
+  if (await exists(metaPath)) {
+    try {
+      const raw = await readFile2(metaPath, "utf8");
+      const parsedJson = JSON.parse(raw);
+      if (!parsedJson || typeof parsedJson !== "object" || parsedJson.schemaVersion !== 1) {
+        diagnostics.push({ severity: "error", code: "invalid-catalog", path: ".memory/.meta/entrypoints.json", message: "Invalid entrypoint catalog schema" });
+      }
+    } catch {
+      diagnostics.push({ severity: "error", code: "invalid-catalog-json", path: ".memory/.meta/entrypoints.json", message: "Malformed entrypoint catalog JSON" });
     }
   }
   const archDir = join2(memoryRoot, "architecture");
   const archIndexPath = join2(archDir, "index.md");
-  if (!await exists(archIndexPath)) {
-    diagnostics.push({ severity: "error", code: "missing-architecture-index", path: ".memory/architecture/index.md", message: "Architecture index (/architecture/index.md) is required" });
-  }
-  for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
-    const flowPath = join2(archDir, layer, "Flow.md");
-    if (!await exists(flowPath)) {
-      diagnostics.push({ severity: "error", code: "missing-mandatory-flow", path: `.memory/architecture/${layer}/Flow.md`, message: `Mandatory architecture flow ${layer}/Flow.md is required` });
+  const currentArchMode = rootIndex && parseMarkdown(rootIndex).data.architecture_mode || "ddd";
+  if (currentArchMode === "ddd") {
+    if (!await exists(archIndexPath)) {
+      diagnostics.push({ severity: "error", code: "missing-architecture-index", path: ".memory/architecture/index.md", message: "Architecture index (/architecture/index.md) is required" });
+    }
+    for (const layer of MANDATORY_ARCHITECTURE_LAYERS) {
+      const flowPath = join2(archDir, layer, "Flow.md");
+      if (!await exists(flowPath)) {
+        diagnostics.push({ severity: "error", code: "missing-mandatory-flow", path: `.memory/architecture/${layer}/Flow.md`, message: `Mandatory architecture flow ${layer}/Flow.md is required` });
+      }
     }
   }
   if (await exists(archDir)) {
@@ -10195,6 +10268,1313 @@ async function searchMemory(projectRoot, query, options) {
   return results.slice(0, limit);
 }
 
+// src/facts.ts
+import { createHash as createHash3 } from "node:crypto";
+import { readFile as readFile3 } from "node:fs/promises";
+import { basename as basename3, join as join3, resolve as resolve3 } from "node:path";
+var CURRENT_CATALOG_SCHEMA_VERSION = 1;
+var CURRENT_GENERATOR_VERSION = "2.1.0";
+var ENTRYPOINTS_META_FILE = ".meta/entrypoints.json";
+function hashText2(text) {
+  return createHash3("sha256").update(text, "utf8").digest("hex");
+}
+async function safeFileHash(root, relPath) {
+  try {
+    const content = await readFile3(resolve3(root, relPath));
+    return createHash3("sha256").update(content).digest("hex");
+  } catch {
+    return "0000000000000000000000000000000000000000000000000000000000000000";
+  }
+}
+function validateCatalog(data) {
+  const errors = [];
+  if (!data || typeof data !== "object") {
+    return { ok: false, errors: ["Catalog must be a non-null object"] };
+  }
+  const obj = data;
+  if (obj.schemaVersion !== CURRENT_CATALOG_SCHEMA_VERSION) {
+    errors.push(`Expected schemaVersion ${CURRENT_CATALOG_SCHEMA_VERSION}, received ${String(obj.schemaVersion)}`);
+  }
+  if (typeof obj.generatorVersion !== "string" || !obj.generatorVersion.trim()) {
+    errors.push("Missing or invalid generatorVersion");
+  }
+  if (!["unconfirmed", "ddd", "other"].includes(obj.architectureMode)) {
+    errors.push(`Invalid architectureMode: ${String(obj.architectureMode)}`);
+  }
+  if (!Array.isArray(obj.facts)) {
+    errors.push("facts must be an array");
+  }
+  if (!Array.isArray(obj.commands)) {
+    errors.push("commands must be an array");
+  }
+  if (!Array.isArray(obj.routes)) {
+    errors.push("routes must be an array");
+  }
+  if (typeof obj.inputFingerprint !== "string") {
+    errors.push("Missing or invalid inputFingerprint");
+  }
+  if (!obj.renderedHashes || typeof obj.renderedHashes !== "object") {
+    errors.push("Missing or invalid renderedHashes");
+  }
+  if (Array.isArray(obj.facts)) {
+    let hasCycle2 = function(id) {
+      visited.add(id);
+      recStack.add(id);
+      const deps = graph.get(id) || [];
+      for (const dep of deps) {
+        if (!visited.has(dep)) {
+          if (hasCycle2(dep)) return true;
+        } else if (recStack.has(dep)) {
+          return true;
+        }
+      }
+      recStack.delete(id);
+      return false;
+    };
+    var hasCycle = hasCycle2;
+    const factIds = /* @__PURE__ */ new Set();
+    const graph = /* @__PURE__ */ new Map();
+    for (let i = 0; i < obj.facts.length; i++) {
+      const fact = obj.facts[i];
+      if (!fact || typeof fact !== "object") {
+        errors.push(`Fact at index ${i} is not an object`);
+        continue;
+      }
+      if (!fact.id || typeof fact.id !== "string") {
+        errors.push(`Fact at index ${i} missing id`);
+      } else {
+        if (factIds.has(fact.id)) {
+          errors.push(`Duplicate fact id: ${fact.id}`);
+        }
+        factIds.add(fact.id);
+        graph.set(fact.id, Array.isArray(fact.dependsOn) ? fact.dependsOn : []);
+      }
+      if (!fact.kind || typeof fact.kind !== "string") {
+        errors.push(`Fact ${fact.id ?? i} missing kind`);
+      }
+      if (!["observed", "approved", "inferred", "unknown", "stale", "conflict"].includes(fact.status)) {
+        errors.push(`Fact ${fact.id ?? i} has invalid status: ${String(fact.status)}`);
+      }
+      if (!Array.isArray(fact.evidence)) {
+        errors.push(`Fact ${fact.id ?? i} evidence must be an array`);
+      }
+    }
+    const visited = /* @__PURE__ */ new Set();
+    const recStack = /* @__PURE__ */ new Set();
+    for (const id of graph.keys()) {
+      if (!visited.has(id)) {
+        if (hasCycle2(id)) {
+          errors.push(`Circular dependency detected involving fact: ${id}`);
+          break;
+        }
+      }
+    }
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, errors: [], catalog: data };
+}
+function serializeCatalog(catalog) {
+  const sorted = {
+    schemaVersion: catalog.schemaVersion,
+    generatorVersion: catalog.generatorVersion,
+    architectureMode: catalog.architectureMode,
+    projectShape: catalog.projectShape,
+    inputFingerprint: catalog.inputFingerprint,
+    renderedHashes: Object.fromEntries(
+      Object.entries(catalog.renderedHashes).sort(([a], [b]) => a.localeCompare(b))
+    ),
+    facts: [...catalog.facts].sort((a, b) => a.id.localeCompare(b.id)),
+    commands: [...catalog.commands].sort((a, b) => a.id.localeCompare(b.id)),
+    routes: [...catalog.routes].sort((a, b) => a.id.localeCompare(b.id))
+  };
+  return JSON.stringify(sorted, null, 2) + "\n";
+}
+function deduplicatePackages(packages) {
+  const seenPaths = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const pkg of packages) {
+    const normPath = assertSafeRelativePath(pkg.path);
+    if (isExcludedPath(normPath)) continue;
+    if (normPath.startsWith("examples/") || normPath.startsWith("docs/")) continue;
+    if (seenPaths.has(normPath)) continue;
+    seenPaths.add(normPath);
+    result.push({
+      path: normPath,
+      name: pkg.name || basename3(normPath),
+      description: pkg.description
+    });
+  }
+  return result.sort((a, b) => a.path.localeCompare(b.path));
+}
+function determineProjectShape(packages, monorepoTool, rootHasWorkspaces) {
+  if (monorepoTool || rootHasWorkspaces && packages.length > 0) {
+    return "workspace";
+  }
+  if (packages.length > 1) {
+    return "workspace";
+  }
+  if (packages.length <= 1) {
+    return "single-package";
+  }
+  return "unknown";
+}
+async function buildEntryPointCatalog(projectRoot, scan, deepScan, options = {}) {
+  const facts = [];
+  const commands = [];
+  const routes = [];
+  const existingFactsById = /* @__PURE__ */ new Map();
+  if (options.existingCatalog?.facts) {
+    for (const f of options.existingCatalog.facts) {
+      existingFactsById.set(f.id, f);
+    }
+  }
+  const filePaths = new Set(scan.files.map((f) => f.path));
+  const rawPackages = deepScan?.architecture.packages ?? [];
+  const cleanPackages = deduplicatePackages(rawPackages);
+  let rootHasWorkspaces = false;
+  if (filePaths.has("package.json")) {
+    try {
+      const raw = await readFile3(resolve3(projectRoot, "package.json"), "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed.workspaces) rootHasWorkspaces = true;
+    } catch {
+    }
+  }
+  if (filePaths.has("Cargo.toml")) {
+    try {
+      const raw = await readFile3(resolve3(projectRoot, "Cargo.toml"), "utf8");
+      if (/\[workspace\]/m.test(raw)) rootHasWorkspaces = true;
+    } catch {
+    }
+  }
+  const shape = determineProjectShape(cleanPackages, deepScan?.techStack.monorepo, rootHasWorkspaces);
+  const rootPurposeId = "fact:purpose:root";
+  const existingRootPurpose = existingFactsById.get(rootPurposeId);
+  const approvedPurpose = options.approvedPurposes?.["."];
+  if (approvedPurpose) {
+    facts.push({
+      id: rootPurposeId,
+      kind: "purpose",
+      scope: ".",
+      status: "approved",
+      summary: approvedPurpose,
+      evidence: [{ path: "README.md", kind: "documentation", sha256: await safeFileHash(projectRoot, "README.md") }],
+      dependsOn: []
+    });
+  } else if (existingRootPurpose && existingRootPurpose.status === "approved") {
+    const freshEvidence = [];
+    let isStale = false;
+    for (const ev of existingRootPurpose.evidence) {
+      const currentHash = await safeFileHash(projectRoot, ev.path);
+      freshEvidence.push({ ...ev, sha256: currentHash });
+      if (currentHash !== ev.sha256) isStale = true;
+    }
+    facts.push({
+      ...existingRootPurpose,
+      status: isStale ? "stale" : "approved",
+      evidence: freshEvidence
+    });
+  } else {
+    const langs = deepScan?.techStack.languages ?? [];
+    const mainLang = langs[0] ?? "unknown language";
+    const desc = `${mainLang} project; product purpose unconfirmed`;
+    facts.push({
+      id: rootPurposeId,
+      kind: "purpose",
+      scope: ".",
+      status: "unknown",
+      summary: desc,
+      evidence: filePaths.has("package.json") ? [{ path: "package.json", kind: "manifest", sha256: await safeFileHash(projectRoot, "package.json") }] : filePaths.has("README.md") ? [{ path: "README.md", kind: "documentation", sha256: await safeFileHash(projectRoot, "README.md") }] : [],
+      dependsOn: []
+    });
+  }
+  const shapeFactId = "fact:capability:shape";
+  const shapeSummary = shape === "workspace" ? `Workspace monorepo with ${cleanPackages.length} package(s): ${cleanPackages.map((p) => p.path).join(", ")}` : shape === "single-package" ? "Single package repository" : "Generic repository; package structure unconfirmed";
+  facts.push({
+    id: shapeFactId,
+    kind: "capability",
+    scope: ".",
+    status: "observed",
+    summary: shapeSummary,
+    evidence: filePaths.has("package.json") ? [{ path: "package.json", kind: "manifest", sha256: await safeFileHash(projectRoot, "package.json") }] : [],
+    dependsOn: []
+  });
+  const scopesToProcess = shape === "workspace" ? cleanPackages.map((p) => p.path) : [];
+  if (filePaths.has("package.json")) {
+    try {
+      const raw = await readFile3(resolve3(projectRoot, "package.json"), "utf8");
+      const pkg = JSON.parse(raw);
+      if (pkg.scripts?.test) {
+        const cmdId = "cmd:root:test";
+        const manifestHash = hashText2(raw);
+        commands.push({
+          id: cmdId,
+          scope: ".",
+          cwd: ".",
+          argv: ["npm", "test"],
+          source: { path: "package.json", kind: "manifest", sha256: manifestHash },
+          availability: "discovered"
+        });
+        facts.push({
+          id: "fact:command:root:test",
+          kind: "command",
+          scope: ".",
+          status: "observed",
+          summary: `Root test script: npm test ("${pkg.scripts.test}")`,
+          evidence: [{ path: "package.json", kind: "manifest", sha256: manifestHash }],
+          dependsOn: []
+        });
+      }
+    } catch {
+    }
+  } else if (filePaths.has("pyproject.toml")) {
+    const cmdId = "cmd:root:pytest";
+    const pyHash = await safeFileHash(projectRoot, "pyproject.toml");
+    commands.push({
+      id: cmdId,
+      scope: ".",
+      cwd: ".",
+      argv: ["pytest"],
+      source: { path: "pyproject.toml", kind: "configuration", sha256: pyHash },
+      availability: "discovered"
+    });
+    facts.push({
+      id: "fact:command:root:pytest",
+      kind: "command",
+      scope: ".",
+      status: "observed",
+      summary: "Python test runner: pytest",
+      evidence: [{ path: "pyproject.toml", kind: "configuration", sha256: pyHash }],
+      dependsOn: []
+    });
+  } else if (filePaths.has("go.mod")) {
+    const cmdId = "cmd:root:gotest";
+    const goHash = await safeFileHash(projectRoot, "go.mod");
+    commands.push({
+      id: cmdId,
+      scope: ".",
+      cwd: ".",
+      argv: ["go", "test", "./..."],
+      source: { path: "go.mod", kind: "manifest", sha256: goHash },
+      availability: "discovered"
+    });
+    facts.push({
+      id: "fact:command:root:gotest",
+      kind: "command",
+      scope: ".",
+      status: "observed",
+      summary: "Go test runner: go test ./...",
+      evidence: [{ path: "go.mod", kind: "manifest", sha256: goHash }],
+      dependsOn: []
+    });
+  } else if (filePaths.has("Cargo.toml")) {
+    const cmdId = "cmd:root:cargotest";
+    const cargoHash = await safeFileHash(projectRoot, "Cargo.toml");
+    commands.push({
+      id: cmdId,
+      scope: ".",
+      cwd: ".",
+      argv: ["cargo", "test"],
+      source: { path: "Cargo.toml", kind: "manifest", sha256: cargoHash },
+      availability: "discovered"
+    });
+    facts.push({
+      id: "fact:command:root:cargotest",
+      kind: "command",
+      scope: ".",
+      status: "observed",
+      summary: "Cargo test runner: cargo test",
+      evidence: [{ path: "Cargo.toml", kind: "manifest", sha256: cargoHash }],
+      dependsOn: []
+    });
+  } else if (filePaths.has("Makefile")) {
+    try {
+      const makeText = await readFile3(resolve3(projectRoot, "Makefile"), "utf8");
+      if (/^test\s*:/m.test(makeText)) {
+        const cmdId = "cmd:root:make-test";
+        const makeHash = hashText2(makeText);
+        commands.push({
+          id: cmdId,
+          scope: ".",
+          cwd: ".",
+          argv: ["make", "test"],
+          source: { path: "Makefile", kind: "configuration", sha256: makeHash },
+          availability: "discovered"
+        });
+        facts.push({
+          id: "fact:command:root:make-test",
+          kind: "command",
+          scope: ".",
+          status: "observed",
+          summary: "Make test recipe: make test",
+          evidence: [{ path: "Makefile", kind: "configuration", sha256: makeHash }],
+          dependsOn: []
+        });
+      }
+    } catch {
+    }
+  }
+  for (const scope of scopesToProcess) {
+    const scopePkgJson = join3(scope, "package.json");
+    const scopeCargoToml = join3(scope, "Cargo.toml");
+    const scopePyproject = join3(scope, "pyproject.toml");
+    let scopeName = basename3(scope);
+    let scopeDesc;
+    let manifestPath;
+    if (filePaths.has(scopePkgJson)) {
+      manifestPath = scopePkgJson;
+      try {
+        const raw = await readFile3(resolve3(projectRoot, scopePkgJson), "utf8");
+        const parsed = JSON.parse(raw);
+        if (parsed.name) scopeName = parsed.name;
+        if (parsed.description) scopeDesc = parsed.description;
+        if (parsed.scripts?.test) {
+          const cmdId = `cmd:${scope}:test`;
+          const pkgHash = hashText2(raw);
+          commands.push({
+            id: cmdId,
+            scope,
+            cwd: scope,
+            argv: ["npm", "test"],
+            source: { path: scopePkgJson, kind: "manifest", sha256: pkgHash },
+            availability: "discovered"
+          });
+        }
+      } catch {
+      }
+    } else if (filePaths.has(scopeCargoToml)) {
+      manifestPath = scopeCargoToml;
+      try {
+        const raw = await readFile3(resolve3(projectRoot, scopeCargoToml), "utf8");
+        const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+        if (match) scopeName = match[1];
+        const cmdId = `cmd:${scope}:test`;
+        const cargoHash = await safeFileHash(projectRoot, scopeCargoToml);
+        commands.push({
+          id: cmdId,
+          scope,
+          cwd: scope,
+          argv: ["cargo", "test"],
+          source: { path: scopeCargoToml, kind: "manifest", sha256: cargoHash },
+          availability: "discovered"
+        });
+      } catch {
+      }
+    } else if (filePaths.has(scopePyproject)) {
+      manifestPath = scopePyproject;
+      try {
+        const raw = await readFile3(resolve3(projectRoot, scopePyproject), "utf8");
+        const match = /^name\s*=\s*"([^"]+)"/m.exec(raw);
+        if (match) scopeName = match[1];
+        const cmdId = `cmd:${scope}:test`;
+        const pyHash = await safeFileHash(projectRoot, scopePyproject);
+        commands.push({
+          id: cmdId,
+          scope,
+          cwd: scope,
+          argv: ["pytest"],
+          source: { path: scopePyproject, kind: "configuration", sha256: pyHash },
+          availability: "discovered"
+        });
+      } catch {
+      }
+    }
+    const scopeFactId = `fact:scope:${scope}`;
+    facts.push({
+      id: scopeFactId,
+      kind: "scope",
+      scope,
+      status: "observed",
+      summary: scopeDesc ? `${scopeName}: ${scopeDesc}` : `${scopeName} (${scope})`,
+      evidence: manifestPath ? [{ path: manifestPath, kind: "manifest", sha256: await safeFileHash(projectRoot, manifestPath) }] : [],
+      dependsOn: []
+    });
+  }
+  const rootTestCmd = commands.find((c) => c.scope === ".");
+  routes.push({
+    id: "route:root:general",
+    intents: ["general", "overview", "setup"],
+    scope: ".",
+    startPaths: filePaths.has("README.md") ? ["README.md"] : [],
+    instructionPaths: [".memory/conventions.md"],
+    verificationCommandIds: rootTestCmd ? [rootTestCmd.id] : [],
+    factIds: [rootPurposeId, shapeFactId],
+    confidence: "direct"
+  });
+  for (const scope of scopesToProcess) {
+    const scopeCmd = commands.find((c) => c.scope === scope) || rootTestCmd;
+    const scopeEntryPoints = (deepScan?.architecture.entryPoints || []).filter((e) => e.startsWith(`${scope}/`));
+    const pkg = cleanPackages.find((p) => p.path === scope);
+    const scopeIntents = [basename3(scope), scope];
+    if (pkg?.name) {
+      scopeIntents.push(pkg.name);
+      for (const part of pkg.name.split(/[^a-zA-Z0-9]/)) {
+        if (part.length > 2) scopeIntents.push(part.toLowerCase());
+      }
+    }
+    routes.push({
+      id: `route:scope:${scope}`,
+      intents: [...new Set(scopeIntents)],
+      scope,
+      startPaths: scopeEntryPoints.slice(0, 2),
+      instructionPaths: [`.memory/${scope}/agents.md`, ".memory/conventions.md"],
+      verificationCommandIds: scopeCmd ? [scopeCmd.id] : [],
+      factIds: [`fact:scope:${scope}`],
+      confidence: "direct"
+    });
+  }
+  const catalog = {
+    schemaVersion: CURRENT_CATALOG_SCHEMA_VERSION,
+    generatorVersion: CURRENT_GENERATOR_VERSION,
+    architectureMode: options.architectureMode ?? options.existingCatalog?.architectureMode ?? "unconfirmed",
+    projectShape: shape,
+    facts,
+    commands,
+    routes,
+    inputFingerprint: scan.fingerprint,
+    renderedHashes: options.existingCatalog?.renderedHashes ?? {}
+  };
+  return catalog;
+}
+
+// src/routing.ts
+function findRoute(catalog, query) {
+  const limit = Math.max(1, Math.min(query.limit ?? 3, 10));
+  const matches = [];
+  const scopeFacts = catalog.facts.filter((f) => f.kind === "scope");
+  const rootCommands = catalog.commands.filter((c) => c.scope === ".");
+  if (query.path) {
+    let cleanPath = query.path.trim();
+    try {
+      cleanPath = assertSafeRelativePath(cleanPath);
+    } catch {
+      cleanPath = normalizeRelative(cleanPath);
+    }
+    let matchedScope = ".";
+    let matchedScopeSummary = "";
+    const sortedScopes = [...scopeFacts].sort((a, b) => b.scope.length - a.scope.length);
+    for (const sf of sortedScopes) {
+      if (cleanPath === sf.scope || cleanPath.startsWith(`${sf.scope}/`)) {
+        matchedScope = sf.scope;
+        matchedScopeSummary = sf.summary;
+        break;
+      }
+    }
+    const scopeCmds = catalog.commands.filter((c) => c.scope === matchedScope);
+    const applicableCommands = scopeCmds.length > 0 ? scopeCmds : rootCommands;
+    const governingDocs = [".memory/conventions.md"];
+    if (matchedScope !== ".") {
+      governingDocs.unshift(`.memory/${matchedScope}/agents.md`);
+    }
+    const warnings = [];
+    if (applicableCommands.length === 0) {
+      warnings.push("No verified test command recorded for this scope");
+    }
+    matches.push({
+      scope: matchedScope,
+      reason: matchedScope === "." ? `Path maps to root project (${cleanPath})` : `Path is inside scope '${matchedScope}' (${matchedScopeSummary || cleanPath})`,
+      confidence: matchedScope === "." ? "heuristic" : "direct",
+      startPaths: [cleanPath],
+      governingDocuments: governingDocs,
+      verificationCommands: applicableCommands,
+      warnings
+    });
+    return {
+      query,
+      matches,
+      fallback: {
+        command: `memory check --for-path ${cleanPath}`,
+        explanation: "Check MUST/NEVER governance rules before editing this path"
+      }
+    };
+  }
+  if (query.task) {
+    const rawTokens = query.task.toLowerCase().replace(/[^a-z0-9_-]/g, " ").split(/\s+/).filter((t) => t.length > 2);
+    const tokens = new Set(rawTokens);
+    for (const route of catalog.routes) {
+      const matchedIntent = route.intents.find((intent) => tokens.has(intent.toLowerCase()));
+      if (matchedIntent) {
+        const routeCmds = catalog.commands.filter((c) => route.verificationCommandIds.includes(c.id));
+        matches.push({
+          scope: route.scope,
+          reason: `Exact intent token match for '${matchedIntent}'`,
+          confidence: "direct",
+          startPaths: route.startPaths,
+          governingDocuments: route.instructionPaths,
+          verificationCommands: routeCmds.length > 0 ? routeCmds : rootCommands,
+          warnings: []
+        });
+      }
+    }
+    for (const sf of scopeFacts) {
+      if (!matches.some((m) => m.scope === sf.scope)) {
+        const scopeTokens = sf.scope.toLowerCase().split(/[/_-]/);
+        const hit = scopeTokens.some((st) => tokens.has(st));
+        if (hit) {
+          const scopeCmds = catalog.commands.filter((c) => c.scope === sf.scope);
+          matches.push({
+            scope: sf.scope,
+            reason: `Scope path matched keyword in query ('${sf.scope}')`,
+            confidence: "heuristic",
+            startPaths: [],
+            governingDocuments: [`.memory/${sf.scope}/agents.md`, ".memory/conventions.md"],
+            verificationCommands: scopeCmds.length > 0 ? scopeCmds : rootCommands,
+            warnings: []
+          });
+        }
+      }
+    }
+    if (matches.length === 0) {
+      matches.push({
+        scope: ".",
+        reason: "No specific sub-scope matched; routing to project root",
+        confidence: "unconfirmed",
+        startPaths: catalog.facts.find((f) => f.id === "fact:purpose:root")?.evidence.map((e) => e.path) || [],
+        governingDocuments: [".memory/conventions.md"],
+        verificationCommands: rootCommands,
+        warnings: ["Task keywords did not unambiguously match any known scope or route"]
+      });
+    }
+    return {
+      query,
+      matches: matches.slice(0, limit),
+      fallback: {
+        command: `memory search ${query.task}`,
+        explanation: "Search durable memory for relevant past decisions or architecture notes"
+      }
+    };
+  }
+  return {
+    query,
+    matches: [
+      {
+        scope: ".",
+        reason: "Empty query; default route to root",
+        confidence: "unconfirmed",
+        startPaths: [],
+        governingDocuments: [".memory/conventions.md"],
+        verificationCommands: rootCommands,
+        warnings: ["Provide --task or --for-path for targeted routing"]
+      }
+    ]
+  };
+}
+
+// src/entrypoints.ts
+var DEFAULT_INDEX_BUDGET_BYTES = 6e3;
+var DEFAULT_AGENTS_BLOCK_BUDGET_BYTES = 6e3;
+var AGENTS_START_MARKER = "<!-- memory:start -->";
+var AGENTS_END_MARKER = "<!-- memory:end -->";
+function projectEntryPoints(catalog, projectName = "project") {
+  const orientation = [];
+  const freshnessWarnings = [];
+  const purposeFact = catalog.facts.find((f) => f.kind === "purpose" && f.scope === ".");
+  if (purposeFact) {
+    orientation.push(purposeFact.summary);
+    if (purposeFact.status === "stale") {
+      freshnessWarnings.push("Project purpose evidence changed; review with `memory sync`");
+    }
+  }
+  const shapeFact = catalog.facts.find((f) => f.kind === "capability" && f.id === "fact:capability:shape");
+  if (shapeFact) {
+    orientation.push(shapeFact.summary);
+  }
+  const staleCount = catalog.facts.filter((f) => f.status === "stale").length;
+  if (staleCount > 0) {
+    freshnessWarnings.push(`${staleCount} fact(s) have stale evidence; run \`memory sync\` to refresh`);
+  }
+  const topScopes = catalog.facts.filter((f) => f.kind === "scope");
+  const applicableMemoryRoutes = [
+    { need: "Choose scope and starting point", label: '`memory route --task "<intent>"`', target: "" },
+    { need: "Rules before editing", label: "`memory check --for-path <path>`", target: "" },
+    { need: "Commands and verification", label: "[Conventions](./conventions.md)", target: "./conventions.md" },
+    { need: "Why / accepted choices", label: "[Decisions](./decisions/index.md) \xB7 `memory decisions`", target: "./decisions/index.md" },
+    { need: "Structure", label: "`memory map`", target: "" },
+    { need: "Recent changes", label: "`memory log --recent 10`", target: "" },
+    { need: "Search / uncertainty", label: "`memory search <keywords>`", target: "" },
+    { need: "External source records", label: "[Sources](./sources/index.md)", target: "./sources/index.md" }
+  ];
+  if (catalog.architectureMode === "ddd") {
+    applicableMemoryRoutes.push({
+      need: "Domain invariants",
+      label: "[Domain Flow](./architecture/domain/Flow.md)",
+      target: "./architecture/domain/Flow.md"
+    });
+  }
+  return {
+    projectName,
+    architectureMode: catalog.architectureMode,
+    projectShape: catalog.projectShape,
+    orientation,
+    freshnessWarnings,
+    topScopes,
+    taskRoutes: catalog.routes,
+    commands: catalog.commands,
+    applicableMemoryRoutes
+  };
+}
+function renderAgentsBlock(projection, budgetBytes = DEFAULT_AGENTS_BLOCK_BUDGET_BYTES) {
+  const mandatoryRules = [
+    "- Before editing a file: `memory check --for-path <file>`. If governance is `hold`, stop and ask.",
+    "- Before proposing a design: `memory decisions`; never contradict an accepted decision without asking.",
+    "- Changing decisions, conventions, scope rules, or architecture: offer 2-3 options, mark one (Recommended), wait for explicit approval.",
+    "- After meaningful work: `memory log --add` one concise entry. Never rewrite history.",
+    "- Write memory only through `memory_apply` or the `memory` CLI."
+  ];
+  const orientationLines = projection.orientation.map((line) => `- ${line}`);
+  if (projection.freshnessWarnings.length > 0) {
+    orientationLines.push(`- Freshness: ${projection.freshnessWarnings.join("; ")}`);
+  } else {
+    orientationLines.push("- Freshness: current (verified by scan)");
+  }
+  let body = [
+    "Project memory lives in `.memory/`. `.memory/index.md` is the router; open only the one file or command it points to for the current need.",
+    "",
+    "### Orientation",
+    ...orientationLines,
+    "",
+    "### Workflow & Governance",
+    ...mandatoryRules
+  ];
+  const optionalTaskLines = [];
+  if (projection.taskRoutes.length > 0) {
+    optionalTaskLines.push("", "### Task Routing");
+    for (const route of projection.taskRoutes.slice(0, 3)) {
+      const startPath = route.startPaths[0] ? `\`${route.startPaths[0]}\`` : `\`${route.scope}\``;
+      const verifyCmd = projection.commands.find((c) => route.verificationCommandIds.includes(c.id));
+      const verifyStr = verifyCmd ? `verify: \`${verifyCmd.argv.join(" ")}\`` : "no verified command recorded";
+      optionalTaskLines.push(`- ${route.intents.join("/")} -> ${startPath} (${verifyStr})`);
+    }
+  }
+  const optionalScopeLines = [];
+  if (projection.topScopes.length > 0) {
+    optionalScopeLines.push("", "### Scopes");
+    const visibleScopes = projection.topScopes.slice(0, 5);
+    for (const scope of visibleScopes) {
+      optionalScopeLines.push(`- \`${scope.scope}\` \u2014 ${scope.summary}`);
+    }
+    if (projection.topScopes.length > 5) {
+      optionalScopeLines.push(`- \u2026 and ${projection.topScopes.length - 5} more: run \`memory route --for-path <path>\``);
+    }
+  }
+  let fullCandidate = [AGENTS_START_MARKER, ...body, ...optionalTaskLines, ...optionalScopeLines, AGENTS_END_MARKER].join("\n");
+  if (Buffer.byteLength(fullCandidate, "utf8") <= budgetBytes) {
+    return fullCandidate;
+  }
+  fullCandidate = [AGENTS_START_MARKER, ...body, ...optionalTaskLines, AGENTS_END_MARKER].join("\n");
+  if (Buffer.byteLength(fullCandidate, "utf8") <= budgetBytes) {
+    return fullCandidate;
+  }
+  fullCandidate = [AGENTS_START_MARKER, ...body, AGENTS_END_MARKER].join("\n");
+  if (Buffer.byteLength(fullCandidate, "utf8") <= budgetBytes) {
+    return fullCandidate;
+  }
+  return [AGENTS_START_MARKER, ...body.slice(0, 7), ...mandatoryRules, AGENTS_END_MARKER].join("\n");
+}
+function renderRootIndex(projection, budgetBytes = DEFAULT_INDEX_BUDGET_BYTES, extraOptions = {}) {
+  const orientationLines = projection.orientation.map((o) => `- ${o}`);
+  if (projection.freshnessWarnings.length > 0) {
+    orientationLines.push(`- Freshness: ${projection.freshnessWarnings.join("; ")}`);
+  } else {
+    orientationLines.push("- Freshness: current (verified by scan)");
+  }
+  const routeTableLines = [
+    "| Need | Open / run |",
+    "|---|---|",
+    ...projection.applicableMemoryRoutes.map((r) => `| ${r.need} | ${r.label} |`)
+  ];
+  const mandatoryBody = [
+    `# ${projection.projectName} memory`,
+    "",
+    "> Links are relative to this file. Read only the route needed for the task.",
+    "",
+    "## Orientation",
+    ...orientationLines,
+    "",
+    "## Route",
+    ...routeTableLines
+  ];
+  const optionalScopeLines = [];
+  if (projection.topScopes.length > 0) {
+    optionalScopeLines.push("", "## Scopes");
+    const visibleScopes = projection.topScopes.slice(0, 5);
+    for (const scope of visibleScopes) {
+      optionalScopeLines.push(`- [${scope.scope}](./${scope.scope}/agents.md) \u2014 ${scope.summary}`);
+    }
+    if (projection.topScopes.length > 5) {
+      optionalScopeLines.push(`- \u2026 and ${projection.topScopes.length - 5} more: \`memory route --for-path <path>\``);
+    }
+  }
+  const decisionsBody = extraOptions.recentDecisionsMarkdown?.trim() || "- none";
+  const optionalDecisionsLines = [
+    "",
+    "## Recent decisions",
+    "<!-- memory:generated:start decisions -->",
+    decisionsBody,
+    "<!-- memory:generated:end decisions -->"
+  ];
+  const activityBody = extraOptions.recentActivityMarkdown?.trim() || "- none";
+  const optionalActivityLines = [
+    "",
+    "## Recent activity",
+    "<!-- memory:generated:start recent -->",
+    activityBody,
+    "<!-- memory:generated:end recent -->"
+  ];
+  const buildOutput = (includeScopes, includeExtras) => {
+    const parts = [...mandatoryBody];
+    if (includeScopes && optionalScopeLines.length > 0) parts.push(...optionalScopeLines);
+    if (includeExtras) {
+      parts.push(...optionalDecisionsLines);
+      parts.push(...optionalActivityLines);
+    }
+    return parts.join("\n") + "\n";
+  };
+  let candidate = buildOutput(true, true);
+  if (Buffer.byteLength(candidate, "utf8") <= budgetBytes) {
+    return candidate;
+  }
+  candidate = buildOutput(true, false);
+  if (Buffer.byteLength(candidate, "utf8") <= budgetBytes) {
+    return candidate;
+  }
+  candidate = buildOutput(false, false);
+  return candidate;
+}
+
+// src/entrypoint-quality.ts
+function evaluateEntryPointQuality(catalog, options = {}) {
+  const safetyViolations = [];
+  if (options.agentsContent) {
+    const startCount = (options.agentsContent.match(new RegExp(AGENTS_START_MARKER, "g")) || []).length;
+    const endCount = (options.agentsContent.match(new RegExp(AGENTS_END_MARKER, "g")) || []).length;
+    if (startCount !== endCount) {
+      safetyViolations.push(`AGENTS.md marker mismatch: ${startCount} starts vs ${endCount} ends`);
+    }
+  }
+  const orientation = { score: 0, max: 10, details: [] };
+  const purposeFact = catalog.facts.find((f) => f.kind === "purpose" && f.scope === ".");
+  const shapeFact = catalog.facts.find((f) => f.kind === "capability" && f.id === "fact:capability:shape");
+  if (purposeFact && purposeFact.summary.trim().length > 0) {
+    orientation.score += 5;
+    orientation.details.push(`Purpose recorded (${purposeFact.status}): ${purposeFact.summary}`);
+  } else {
+    orientation.details.push("Missing project purpose fact");
+  }
+  if (shapeFact && ["single-package", "workspace", "unknown"].includes(catalog.projectShape)) {
+    orientation.score += 5;
+    orientation.details.push(`Valid shape classified: ${catalog.projectShape}`);
+  } else {
+    orientation.details.push("Invalid or missing shape classification");
+  }
+  const scopeOwnership = { score: 0, max: 20, details: [] };
+  const scopeFacts = catalog.facts.filter((f) => f.kind === "scope");
+  if (catalog.projectShape === "workspace") {
+    if (scopeFacts.length > 0) {
+      scopeOwnership.score += 20;
+      scopeOwnership.details.push(`${scopeFacts.length} workspace scope(s) identified with evidence`);
+    } else {
+      scopeOwnership.details.push("Workspace classified but 0 scopes recorded");
+    }
+  } else {
+    scopeOwnership.score += 20;
+    scopeOwnership.details.push("Single package / non-workspace scopes validly empty");
+  }
+  const taskRouting = { score: 0, max: 25, details: [] };
+  if (catalog.routes.length > 0) {
+    taskRouting.score += 15;
+    taskRouting.details.push(`${catalog.routes.length} task route(s) defined`);
+    const hasGoverningDocs = catalog.routes.every((r) => r.instructionPaths.length > 0);
+    if (hasGoverningDocs) {
+      taskRouting.score += 10;
+      taskRouting.details.push("All routes include governing instruction documents");
+    } else {
+      taskRouting.details.push("Some routes lack governing instruction paths");
+    }
+  } else {
+    taskRouting.details.push("No task routes defined in catalog");
+  }
+  const verificationRouting = { score: 0, max: 15, details: [] };
+  if (catalog.commands.length > 0) {
+    const validCommands = catalog.commands.every(
+      (c) => Array.isArray(c.argv) && c.argv.length > 0 && typeof c.cwd === "string"
+    );
+    if (validCommands) {
+      verificationRouting.score += 15;
+      verificationRouting.details.push(`${catalog.commands.length} structured verification command(s) with valid argv & cwd`);
+    } else {
+      verificationRouting.details.push("Some verification commands have invalid structure");
+    }
+  } else {
+    verificationRouting.score += 15;
+    verificationRouting.details.push("No discovered verification scripts (explicit unavailable state; valid for non-code repos)");
+  }
+  const freshnessProvenance = { score: 0, max: 15, details: [] };
+  const hasEvidence = catalog.facts.every((f) => Array.isArray(f.evidence));
+  const hasValidStatus = catalog.facts.every(
+    (f) => ["observed", "approved", "inferred", "unknown", "stale", "conflict"].includes(f.status)
+  );
+  if (hasEvidence && hasValidStatus) {
+    freshnessProvenance.score += 15;
+    freshnessProvenance.details.push("All facts have validated evidence arrays and legitimate statuses");
+  } else {
+    freshnessProvenance.details.push("Some facts have missing evidence or invalid status");
+  }
+  const contextEconomy = { score: 0, max: 10, details: [] };
+  let economyScore = 10;
+  if (options.agentsContent) {
+    const bytes = Buffer.byteLength(options.agentsContent, "utf8");
+    if (bytes > 6e3) {
+      economyScore -= 5;
+      contextEconomy.details.push(`AGENTS.md exceeds 6000 bytes hard budget (${bytes} bytes)`);
+    } else {
+      contextEconomy.details.push(`AGENTS.md fits within budget (${bytes} bytes)`);
+    }
+  }
+  if (options.indexContent) {
+    const bytes = Buffer.byteLength(options.indexContent, "utf8");
+    if (bytes > 6e3) {
+      economyScore -= 5;
+      contextEconomy.details.push(`.memory/index.md exceeds 6000 bytes hard budget (${bytes} bytes)`);
+    } else {
+      contextEconomy.details.push(`.memory/index.md fits within budget (${bytes} bytes)`);
+    }
+  }
+  contextEconomy.score = Math.max(0, economyScore);
+  const semanticClarity = { score: 0, max: 5, details: [] };
+  if (["unconfirmed", "ddd", "other"].includes(catalog.architectureMode)) {
+    semanticClarity.score += 5;
+    semanticClarity.details.push(`Architecture mode clearly specified (${catalog.architectureMode})`);
+  } else {
+    semanticClarity.details.push("Invalid architecture mode specified");
+  }
+  const totalScore = orientation.score + scopeOwnership.score + taskRouting.score + verificationRouting.score + freshnessProvenance.score + contextEconomy.score + semanticClarity.score;
+  return {
+    score: totalScore,
+    max: 100,
+    categories: {
+      orientation,
+      scopeOwnership,
+      taskRouting,
+      verificationRouting,
+      freshnessProvenance,
+      contextEconomy,
+      semanticClarity
+    },
+    passedSafetyGates: safetyViolations.length === 0,
+    safetyViolations
+  };
+}
+
+// src/agents-review.ts
+import { createHash as createHash4 } from "node:crypto";
+import { writeFile as writeFile2 } from "node:fs/promises";
+import { join as join4, resolve as resolve4 } from "node:path";
+function sha256(content) {
+  return createHash4("sha256").update(content).digest("hex");
+}
+async function auditAgentsInstructions(projectRoot, _catalog) {
+  const root = resolve4(projectRoot);
+  const agentsPath = join4(root, "AGENTS.md");
+  const content = await readIfExists(agentsPath);
+  if (content === void 0) {
+    return {
+      target: "AGENTS.md",
+      filePresent: false,
+      byteLength: 0,
+      hasMarkers: false,
+      findings: [
+        {
+          severity: "warning",
+          code: "missing-agents-file",
+          message: "AGENTS.md is absent; run `memory sync` or `memory init` to generate",
+          confidence: "high"
+        }
+      ],
+      recommendedEdits: []
+    };
+  }
+  const findings = [];
+  const recommendedEdits = [];
+  const byteLength = Buffer.byteLength(content, "utf8");
+  const startMatches = content.match(new RegExp(AGENTS_START_MARKER, "g")) || [];
+  const endMatches = content.match(new RegExp(AGENTS_END_MARKER, "g")) || [];
+  if (startMatches.length === 0 && endMatches.length === 0) {
+    findings.push({
+      severity: "warning",
+      code: "missing-markers",
+      message: "AGENTS.md exists but has no memory managed markers (<!-- memory:start -->)",
+      confidence: "high"
+    });
+  } else if (startMatches.length !== 1 || endMatches.length !== 1) {
+    findings.push({
+      severity: "error",
+      code: "malformed-markers",
+      message: `AGENTS.md has malformed or duplicate markers: ${startMatches.length} start(s), ${endMatches.length} end(s)`,
+      confidence: "high"
+    });
+  } else if (content.indexOf(AGENTS_START_MARKER) > content.indexOf(AGENTS_END_MARKER)) {
+    findings.push({
+      severity: "error",
+      code: "reversed-markers",
+      message: "AGENTS.md has reversed markers: memory:end appears before memory:start",
+      confidence: "high"
+    });
+  }
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let match;
+  while ((match = linkRegex.exec(content)) !== null) {
+    const rawTarget = match[2].trim();
+    if (!rawTarget.startsWith("http://") && !rawTarget.startsWith("https://") && !rawTarget.startsWith("#") && !rawTarget.startsWith("mailto:")) {
+      const cleanPath = rawTarget.split("#")[0].split("?")[0];
+      if (cleanPath) {
+        const fullTarget = resolve4(root, cleanPath);
+        const fileExists = await exists(fullTarget);
+        if (!fileExists) {
+          findings.push({
+            severity: "warning",
+            code: "broken-local-link",
+            message: `Referenced local file does not exist: '${cleanPath}'`,
+            quote: match[0],
+            confidence: "high"
+          });
+        }
+      }
+    }
+  }
+  if (byteLength > 1e4) {
+    findings.push({
+      severity: "advisory",
+      code: "large-instructions",
+      message: `AGENTS.md is ${byteLength} bytes; consider trimming redundant rules to keep agent startup compact`,
+      confidence: "medium"
+    });
+  }
+  return {
+    target: "AGENTS.md",
+    filePresent: true,
+    byteLength,
+    hasMarkers: startMatches.length === 1 && endMatches.length === 1,
+    findings,
+    recommendedEdits
+  };
+}
+async function applyAgentsReviewPlan(projectRoot, plan, options) {
+  if (plan.target !== "AGENTS.md") {
+    throw new Error(`Invalid plan target: ${String(plan.target)}`);
+  }
+  if (!options.approval || !options.approval.trim()) {
+    throw new Error("Explicit user approval is required to apply review edits to human instructions");
+  }
+  const root = resolve4(projectRoot);
+  const agentsPath = join4(root, "AGENTS.md");
+  return await withBundleLock(root, async () => {
+    const content = await readIfExists(agentsPath) ?? "";
+    const currentSha = sha256(content);
+    if (currentSha !== plan.baseSha256) {
+      throw new Error(`Stale review plan: AGENTS.md has changed on disk (expected ${plan.baseSha256}, got ${currentSha})`);
+    }
+    const contentBuffer = Buffer.from(content, "utf8");
+    const sortedEdits = [...plan.edits].sort((a, b) => a.startByte - b.startByte);
+    let lastEnd = 0;
+    const startMarkerPos = content.indexOf(AGENTS_START_MARKER);
+    const endMarkerPos = content.indexOf(AGENTS_END_MARKER);
+    const managedRangeStart = startMarkerPos !== -1 ? Buffer.byteLength(content.slice(0, startMarkerPos), "utf8") : -1;
+    const managedRangeEnd = endMarkerPos !== -1 ? Buffer.byteLength(content.slice(0, endMarkerPos + AGENTS_END_MARKER.length), "utf8") : -1;
+    for (const edit of sortedEdits) {
+      if (edit.startByte < lastEnd) {
+        throw new Error(`Overlapping edit range: [${edit.startByte}, ${edit.endByte}] overlaps previous end ${lastEnd}`);
+      }
+      if (edit.endByte > contentBuffer.length) {
+        throw new Error(`Edit range out of bounds: endByte ${edit.endByte} exceeds file length ${contentBuffer.length}`);
+      }
+      const actualSlice = contentBuffer.subarray(edit.startByte, edit.endByte).toString("utf8");
+      if (actualSlice !== edit.expectedText) {
+        throw new Error(`Expected text mismatch at [${edit.startByte}, ${edit.endByte}]: expected '${edit.expectedText}', found '${actualSlice}'`);
+      }
+      if (managedRangeStart !== -1 && managedRangeEnd !== -1) {
+        if (edit.startByte >= managedRangeStart && edit.startByte < managedRangeEnd || edit.endByte > managedRangeStart && edit.endByte <= managedRangeEnd) {
+          throw new Error("Review plan cannot modify the managed memory block; use memory sync instead");
+        }
+      }
+      lastEnd = edit.endByte;
+    }
+    let newBuffer = contentBuffer;
+    const reverseEdits = [...sortedEdits].sort((a, b) => b.startByte - a.startByte);
+    for (const edit of reverseEdits) {
+      const before = newBuffer.subarray(0, edit.startByte);
+      const after = newBuffer.subarray(edit.endByte);
+      const replacementBuffer = Buffer.from(edit.replacementText, "utf8");
+      newBuffer = Buffer.concat([before, replacementBuffer, after]);
+    }
+    const updatedText = newBuffer.toString("utf8");
+    if (options.dryRun) {
+      return {
+        path: "AGENTS.md",
+        action: "update",
+        bytes: Buffer.byteLength(updatedText, "utf8")
+      };
+    }
+    await writeFile2(agentsPath, updatedText, "utf8");
+    return {
+      path: "AGENTS.md",
+      action: "update",
+      bytes: Buffer.byteLength(updatedText, "utf8")
+    };
+  });
+}
+
+// src/maintenance.ts
+import { createHash as createHash5 } from "node:crypto";
+import { mkdir as mkdir2, readFile as readFile4, rm as rm2, writeFile as writeFile3 } from "node:fs/promises";
+import { basename as basename4, dirname as dirname3, join as join5, resolve as resolve5 } from "node:path";
+function sha2562(content) {
+  return createHash5("sha256").update(content).digest("hex");
+}
+async function captureRecoverySnapshot(projectRoot) {
+  const snapshot = /* @__PURE__ */ new Map();
+  const root = resolve5(projectRoot);
+  const memRoot = bundlePath(root);
+  const agentsPath = join5(root, "AGENTS.md");
+  const agentsContent = await readIfExists(agentsPath);
+  snapshot.set(agentsPath, agentsContent ?? null);
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await (await import("node:fs/promises")).readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".lock" || entry.name.endsWith(".tmp")) continue;
+      const fullPath = join5(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        snapshot.set(fullPath, await readFile4(fullPath, "utf8"));
+      }
+    }
+  }
+  await walk(memRoot);
+  return snapshot;
+}
+async function restoreRecoverySnapshot(snapshot) {
+  for (const [filePath, content] of snapshot.entries()) {
+    if (content === null) {
+      try {
+        await rm2(filePath, { force: true });
+      } catch {
+      }
+    } else {
+      await mkdir2(dirname3(filePath), { recursive: true });
+      await writeFile3(filePath, content, "utf8");
+    }
+  }
+}
+async function readExistingCatalog(projectRoot) {
+  const metaPath = join5(bundlePath(projectRoot), ENTRYPOINTS_META_FILE);
+  const content = await readIfExists(metaPath);
+  if (!content) return void 0;
+  try {
+    const parsed = JSON.parse(content);
+    const valid = validateCatalog(parsed);
+    return valid.ok ? valid.catalog : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function planEntryPointMaintenance(projectRoot, mode, options = {}) {
+  const root = resolve5(projectRoot);
+  const scan = options.scan ?? await scanRepository(root);
+  const deepScan = await deepScanRepository(root, scan);
+  const existingCatalog = await readExistingCatalog(root);
+  const documentBaseHashes = {};
+  const renderedOutputs = {};
+  const fileChanges = [];
+  const diagnostics = [];
+  const agentsPath = join5(root, "AGENTS.md");
+  const agentsContent = await readIfExists(agentsPath) ?? "";
+  documentBaseHashes["AGENTS.md"] = sha2562(agentsContent);
+  const indexPath = join5(bundlePath(root), "index.md");
+  const indexContent = await readIfExists(indexPath) ?? "";
+  documentBaseHashes[".memory/index.md"] = sha2562(indexContent);
+  const metaPath = join5(bundlePath(root), ENTRYPOINTS_META_FILE);
+  const metaContent = await readIfExists(metaPath) ?? "";
+  documentBaseHashes[`.memory/${ENTRYPOINTS_META_FILE}`] = sha2562(metaContent);
+  const catalog = await buildEntryPointCatalog(root, scan, deepScan, {
+    existingCatalog
+  });
+  const projectName = basename4(root);
+  const projection = projectEntryPoints(catalog, projectName);
+  const newAgentsBlock = renderAgentsBlock(projection);
+  let updatedAgentsContent = agentsContent;
+  if (!agentsContent.trim()) {
+    updatedAgentsContent = `# ${projectName}
+
+${newAgentsBlock}
+`;
+  } else {
+    const startCount = (agentsContent.match(new RegExp(AGENTS_START_MARKER, "g")) || []).length;
+    const endCount = (agentsContent.match(new RegExp(AGENTS_END_MARKER, "g")) || []).length;
+    if (startCount !== endCount || startCount > 1) {
+      diagnostics.push({
+        severity: "error",
+        code: "malformed-markers",
+        path: "AGENTS.md",
+        message: `AGENTS.md contains invalid markers (starts: ${startCount}, ends: ${endCount})`
+      });
+    } else if (startCount === 1) {
+      const startIndex = agentsContent.indexOf(AGENTS_START_MARKER);
+      const endIndex = agentsContent.indexOf(AGENTS_END_MARKER) + AGENTS_END_MARKER.length;
+      const prefix = agentsContent.slice(0, startIndex);
+      const suffix = agentsContent.slice(endIndex);
+      updatedAgentsContent = `${prefix}${newAgentsBlock}${suffix}`;
+    } else {
+      updatedAgentsContent = `${agentsContent.trimEnd()}
+
+${newAgentsBlock}
+`;
+    }
+  }
+  renderedOutputs["AGENTS.md"] = updatedAgentsContent;
+  if (sha2562(updatedAgentsContent) !== documentBaseHashes["AGENTS.md"]) {
+    fileChanges.push({
+      path: "AGENTS.md",
+      action: agentsContent ? "update" : "create",
+      bytes: Buffer.byteLength(updatedAgentsContent, "utf8")
+    });
+  }
+  function extractGeneratedRegion(content, name) {
+    const startMarker = `<!-- memory:generated:start ${name} -->`;
+    const endMarker = `<!-- memory:generated:end ${name} -->`;
+    const start = content.indexOf(startMarker);
+    const end = content.indexOf(endMarker);
+    if (start < 0 || end < 0 || start > end) return void 0;
+    return content.slice(start + startMarker.length, end).trim();
+  }
+  let newIndexContent = "";
+  if (indexContent) {
+    const parsed = parseMarkdown(indexContent);
+    const existingDecisions = extractGeneratedRegion(indexContent, "decisions");
+    const existingRecent = extractGeneratedRegion(indexContent, "recent");
+    const body = renderRootIndex(projection, void 0, {
+      recentDecisionsMarkdown: existingDecisions,
+      recentActivityMarkdown: existingRecent
+    });
+    const frontmatterObj = {
+      ...parsed.data,
+      project_name: projectName,
+      architecture_mode: catalog.architectureMode
+    };
+    newIndexContent = serializeMarkdown(frontmatterObj, body);
+  } else {
+    const rawBody = renderRootIndex(projection);
+    newIndexContent = serializeMarkdown(
+      {
+        memory_version: "0.3",
+        project_name: projectName,
+        architecture_mode: catalog.architectureMode
+      },
+      rawBody
+    );
+  }
+  renderedOutputs[".memory/index.md"] = newIndexContent;
+  if (sha2562(newIndexContent) !== documentBaseHashes[".memory/index.md"]) {
+    fileChanges.push({
+      path: ".memory/index.md",
+      action: indexContent ? "update" : "create",
+      bytes: Buffer.byteLength(newIndexContent, "utf8")
+    });
+  }
+  const unmanagedStarts = updatedAgentsContent.indexOf(AGENTS_START_MARKER);
+  const unmanagedEnds = updatedAgentsContent.indexOf(AGENTS_END_MARKER);
+  let plannedUnmanaged = updatedAgentsContent;
+  if (unmanagedStarts !== -1 && unmanagedEnds !== -1 && unmanagedEnds >= unmanagedStarts) {
+    plannedUnmanaged = updatedAgentsContent.slice(0, unmanagedStarts) + updatedAgentsContent.slice(unmanagedEnds + AGENTS_END_MARKER.length);
+  }
+  const plannedUnmanagedTrimmed = plannedUnmanaged.trim();
+  const fpParts = scan.files.filter((f) => f.path !== "AGENTS.md").map((file) => `${file.path}:${file.size}:${Math.floor(file.mtimeMs)}`);
+  if (plannedUnmanagedTrimmed.length > 0) {
+    const unmanagedHash = sha2562(plannedUnmanagedTrimmed);
+    fpParts.push(`AGENTS.md:unmanaged:${unmanagedHash}`);
+  }
+  fpParts.sort();
+  catalog.inputFingerprint = `sha256:${sha2562(fpParts.join("\n"))}`;
+  catalog.renderedHashes = {
+    "AGENTS.md": sha2562(updatedAgentsContent),
+    ".memory/index.md": sha2562(newIndexContent)
+  };
+  const serializedCatalog = serializeCatalog(catalog);
+  renderedOutputs[`.memory/${ENTRYPOINTS_META_FILE}`] = serializedCatalog;
+  if (sha2562(serializedCatalog) !== documentBaseHashes[`.memory/${ENTRYPOINTS_META_FILE}`]) {
+    fileChanges.push({
+      path: `.memory/${ENTRYPOINTS_META_FILE}`,
+      action: metaContent ? "update" : "create",
+      bytes: Buffer.byteLength(serializedCatalog, "utf8")
+    });
+  }
+  const staleFactIds = catalog.facts.filter((f) => f.status === "stale").map((f) => f.id);
+  const semanticReviewRequired = catalog.facts.filter((f) => f.status === "unknown" && f.kind === "purpose").map((f) => f.id);
+  return {
+    mode,
+    baseInputFingerprint: scan.fingerprint,
+    documentBaseHashes,
+    changedFactIds: [],
+    staleFactIds,
+    semanticReviewRequired,
+    fileChanges,
+    catalog,
+    renderedOutputs,
+    diagnostics
+  };
+}
+async function applyEntryPointMaintenance(projectRoot, plan, options = {}) {
+  const root = resolve5(projectRoot);
+  if (plan.diagnostics.some((d) => d.severity === "error")) {
+    const errMsgs = plan.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.path ?? "entrypoints"}: ${d.message}`).join("; ");
+    throw new Error(`Cannot apply maintenance with errors: ${errMsgs}`);
+  }
+  if (options.dryRun) {
+    return plan.fileChanges;
+  }
+  return await withBundleLock(root, async () => {
+    for (const [relPath, expectedHash] of Object.entries(plan.documentBaseHashes)) {
+      const fullPath = relPath === "AGENTS.md" ? join5(root, "AGENTS.md") : join5(root, relPath);
+      const currentContent = await readIfExists(fullPath) ?? "";
+      const currentHash = sha2562(currentContent);
+      if (currentHash !== expectedHash) {
+        throw new Error(`Stale maintenance plan: ${relPath} was modified on disk concurrently`);
+      }
+    }
+    const snapshot = await captureRecoverySnapshot(root);
+    try {
+      const appliedChanges = [];
+      for (const [relPath, content] of Object.entries(plan.renderedOutputs)) {
+        const fullPath = relPath === "AGENTS.md" ? join5(root, "AGENTS.md") : join5(root, relPath);
+        const existingContent = await readIfExists(fullPath) ?? "";
+        if (existingContent === content) {
+          continue;
+        }
+        await mkdir2(dirname3(fullPath), { recursive: true });
+        const tmpPath = `${fullPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        await writeFile3(tmpPath, content, "utf8");
+        await (await import("node:fs/promises")).rename(tmpPath, fullPath);
+        appliedChanges.push({
+          path: relPath,
+          action: existingContent ? "update" : "create",
+          bytes: Buffer.byteLength(content, "utf8")
+        });
+      }
+      return appliedChanges;
+    } catch (err) {
+      await restoreRecoverySnapshot(snapshot);
+      throw err;
+    }
+  });
+}
+
 // src/cli.ts
 var HELP = `Project Memory CLI
 
@@ -10209,6 +11589,7 @@ Read (cheap, targeted):
   search <query>       BM25 search across .memory; returns ranked snippets
   context              Emit the exact context injected into agents
   map                  On-demand codebase treemap
+  route                Targeted task and path routing (--task, --for-path, --limit)
 
 Write (validated, atomic):
   log --add            Append a log entry (--type, --title, --summary, --files, --scope)
@@ -10219,8 +11600,8 @@ Write (validated, atomic):
   sync                 Refresh fingerprints/indexes, archive old log months
   init | scaffold      Create .memory or add tracked scopes (deep scan by default)
   migrate              Upgrade 0.1/0.2 bundles to 0.3 (archives goal/progress/tasks)
-  validate             Validate format, links, budgets, drift
-  agents-sync          Add or repair the managed AGENTS.md block
+  validate             Validate format, links, budgets, drift (--entrypoints, --quality)
+  agents-sync          Add or repair the managed AGENTS.md block (--check, --review)
   scan                 Inspect repository files and propose tracked scopes
 
 Common options:
@@ -10228,6 +11609,7 @@ Common options:
   --limit <n> / --recent <n>  --type <t> (repeatable)  --since YYYY-MM-DD  --query <text>
   --all (include archived log months)  --drift  --strict  --check  --fetch-remote
   --shallow  --budget <bytes>  --source <path|url>  --source-text[-file]  --plan[-file]  --event[-file]
+  --task <intent>  --entrypoints  --quality  --review
 `;
 function parseArguments(argv) {
   const { values: flags2, positionals } = parseArgs({
@@ -10237,10 +11619,15 @@ function parseArguments(argv) {
       root: { type: "string" },
       scope: { type: "string", multiple: true },
       "for-path": { type: "string" },
+      task: { type: "string" },
       query: { type: "string" },
       limit: { type: "string" },
       drift: { type: "boolean" },
       strict: { type: "boolean" },
+      entrypoints: { type: "boolean" },
+      quality: { type: "boolean" },
+      review: { type: "boolean" },
+      "apply-review": { type: "string" },
       budget: { type: "string" },
       deep: { type: "boolean" },
       shallow: { type: "boolean" },
@@ -10365,6 +11752,22 @@ ${changes.map((c) => `  ${c.action}|${c.path}`).join("\n")}`;
     return `${head}
 ${object.treemap}`;
   }
+  if ("matches" in object && "query" in object) {
+    const res = object;
+    const lines = [`route[scope|confidence|reason]:`];
+    for (const m of res.matches) {
+      lines.push(`  ${m.scope}|${m.confidence}|${m.reason}`);
+    }
+    return lines.join("\n");
+  }
+  if ("target" in object && "recommendedEdits" in object && "findings" in object) {
+    const res = object;
+    const lines = [`audit:${res.target}|bytes:${res.byteLength}|markers:${res.hasMarkers}`];
+    for (const f of res.findings) {
+      lines.push(`  [${f.severity}] ${f.code}: ${f.message}`);
+    }
+    return lines.join("\n");
+  }
   return Object.entries(object).map(([k, v]) => v && typeof v === "object" ? `${k}:${JSON.stringify(v)}` : `${k}:${v}`).join(" | ");
 }
 function isLogEntryList(value) {
@@ -10419,6 +11822,26 @@ function summarize(value) {
     }
     return lines.join("\n");
   }
+  if ("matches" in object && "query" in object) {
+    const res = object;
+    const lines = [`Route for ${res.query.task ? `task "${res.query.task}"` : `path "${res.query.path}"`}:`];
+    for (const m of res.matches) {
+      lines.push(`- Scope: ${m.scope} [${m.confidence}] (${m.reason})`);
+      if (m.startPaths.length > 0) lines.push(`  Start: ${m.startPaths.join(", ")}`);
+      if (m.governingDocuments.length > 0) lines.push(`  Governing: ${m.governingDocuments.join(", ")}`);
+      if (m.verificationCommands.length > 0) lines.push(`  Verify: ${m.verificationCommands.map((c) => c.argv.join(" ")).join("; ")}`);
+    }
+    if (res.fallback) lines.push(`Fallback: ${res.fallback.command} (${res.fallback.explanation})`);
+    return lines.join("\n");
+  }
+  if ("target" in object && "recommendedEdits" in object && "findings" in object) {
+    const res = object;
+    const lines = [`Audit for ${res.target} (${res.byteLength} bytes, markers: ${res.hasMarkers ? "valid" : "invalid"}):`];
+    for (const f of res.findings) {
+      lines.push(`- [${f.severity.toUpperCase()}] ${f.code}: ${f.message}`);
+    }
+    return lines.join("\n");
+  }
   if ("diagnostics" in object && "counts" in object) {
     const counts = object.counts;
     const diagnostics = object.diagnostics;
@@ -10463,11 +11886,11 @@ function operationRequiresApprovalForEvent(event) {
   return SEMANTIC_EVENT_TYPES.has(String(event.type ?? "").toLowerCase());
 }
 async function rootFor(args) {
-  return findProjectRoot(resolve3(flag(args, "root") ?? process.cwd()));
+  return findProjectRoot(resolve6(flag(args, "root") ?? process.cwd()));
 }
 async function storedRepositoryHead(root) {
   try {
-    const parsed = parseMarkdown(await readFile3(resolve3(root, ".memory", "index.md"), "utf8"));
+    const parsed = parseMarkdown(await readFile5(resolve6(root, ".memory", "index.md"), "utf8"));
     return typeof parsed.data.repository_head === "string" ? parsed.data.repository_head : void 0;
   } catch {
     return void 0;
@@ -10507,8 +11930,13 @@ async function runCli(argv, io = {
         const shallow = enabled(args, "shallow");
         const deep = !shallow;
         const scan = await scanRepository(root);
-        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename3(root), deep });
+        const mutate = () => initializeBundle(root, requested, { dryRun, projectName: basename5(root), deep });
         const initialized = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        if (!dryRun) {
+          const plan = await planEntryPointMaintenance(root, "init");
+          const maintenanceChanges = await applyEntryPointMaintenance(root, plan);
+          initialized.changes.push(...maintenanceChanges);
+        }
         result = { ...initialized, candidates: scan.candidates };
         break;
       }
@@ -10527,11 +11955,14 @@ async function runCli(argv, io = {
           const sources = await refreshRegisteredSources(root, { dryRun, fetchRemote: enabled(args, "fetch-remote") });
           const rotated = await rotateLogs(root, { dryRun });
           const changes = [...rotated, ...await syncIndexes(root, scan, { dryRun })];
-          const agents = await syncAgentsFile(root, { dryRun });
           const validation = await validateBundle(root);
-          return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes: [...changes, agents], validation };
+          return { changedPaths: changed, affectedScopes: mapPathsToScopes(changed, knownScopes), sources, changes, validation };
         };
-        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        const syncRes = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        const plan = await planEntryPointMaintenance(root, "sync");
+        const maintenanceChanges = await applyEntryPointMaintenance(root, plan, { dryRun });
+        syncRes.changes.push(...maintenanceChanges);
+        result = syncRes;
         break;
       }
       case "status": {
@@ -10584,13 +12015,13 @@ async function runCli(argv, io = {
         if (args.positional.length > 0 && sourceInputs.length === 0 && !flag(args, "event")) sourceInputs.push(args.positional[0]);
         const scope = flag(args, "scope") ?? ".";
         const sourceTextFile = flag(args, "source-text-file");
-        const sourceText = flag(args, "source-text") ?? (sourceTextFile ? await readFile3(resolve3(sourceTextFile), "utf8") : void 0);
-        const sourceName = flag(args, "source-name") ?? (sourceTextFile ? basename3(sourceTextFile) : "approved-input");
+        const sourceText = flag(args, "source-text") ?? (sourceTextFile ? await readFile5(resolve6(sourceTextFile), "utf8") : void 0);
+        const sourceName = flag(args, "source-name") ?? (sourceTextFile ? basename5(sourceTextFile) : "approved-input");
         const sourceKindValue = flag(args, "source-kind") ?? "input";
         if (!["conversation", "brief", "input"].includes(sourceKindValue)) throw new Error("--source-kind must be conversation, brief, or input");
         const sourceKind = sourceKindValue;
         const eventFile = flag(args, "event-file");
-        const eventText = flag(args, "event") ?? (eventFile ? await readFile3(resolve3(eventFile), "utf8") : void 0);
+        const eventText = flag(args, "event") ?? (eventFile ? await readFile5(resolve6(eventFile), "utf8") : void 0);
         const event = eventText ? JSON.parse(eventText) : void 0;
         if (sourceInputs.length === 0 && !sourceText && !event) throw new Error("record requires --source, --source-text, --source-text-file, or --event");
         const mutate = async () => {
@@ -10682,20 +12113,69 @@ async function runCli(argv, io = {
         result = await checkPathGovernance(root, targetPath);
         break;
       }
+      case "route": {
+        const catalog = await readExistingCatalog(root) ?? (await planEntryPointMaintenance(root, "sync")).catalog;
+        const task = flag(args, "task");
+        const path = flag(args, "for-path") ?? args.positional[0];
+        const limitStr = flag(args, "limit");
+        const limit = limitStr ? Number.parseInt(limitStr, 10) : void 0;
+        result = findRoute(catalog, { task, path, limit });
+        break;
+      }
       case "validate": {
         const drift = enabled(args, "drift");
         const strict = enabled(args, "strict");
-        result = await validateBundle(root, { drift, strict });
+        const valRes = await validateBundle(root, { drift, strict });
+        if (enabled(args, "entrypoints") || enabled(args, "quality")) {
+          const catalog = await readExistingCatalog(root);
+          if (!catalog) {
+            valRes.ok = false;
+            valRes.diagnostics.push({ severity: "error", code: "missing-catalog", path: ".memory/.meta/entrypoints.json", message: "Entrypoint catalog is missing; run memory sync" });
+            result = valRes;
+          } else {
+            const agentsContent = await readIfExists(join6(root, "AGENTS.md"));
+            const indexContent = await readIfExists(join6(bundlePath(root), "index.md"));
+            const qualityReport = evaluateEntryPointQuality(catalog, { agentsContent, indexContent });
+            result = {
+              ...valRes,
+              entrypoints: {
+                catalogOk: true,
+                quality: qualityReport
+              }
+            };
+            if (!qualityReport.passedSafetyGates || strict && qualityReport.score < 90) {
+              valRes.ok = false;
+            }
+          }
+        } else {
+          result = valRes;
+        }
         break;
       }
       case "agents-sync": {
-        const mutate = () => syncAgentsFile(root, { dryRun });
-        result = dryRun ? await mutate() : await withBundleLock(root, mutate);
+        if (enabled(args, "review")) {
+          const catalog = await readExistingCatalog(root);
+          result = await auditAgentsInstructions(root, catalog);
+          break;
+        }
+        const plan = await planEntryPointMaintenance(root, "agents-sync");
+        const mutate = () => applyEntryPointMaintenance(root, plan, { dryRun });
+        result = await mutate();
+        break;
+      }
+      case "apply-review": {
+        const planPath = flag(args, "apply-review") ?? flag(args, "plan-file") ?? args.positional[0];
+        if (!planPath) throw new Error("apply-review requires plan file path");
+        const raw = await readFile5(resolve6(planPath), "utf8");
+        const plan = JSON.parse(raw);
+        const approval = flag(args, "approval");
+        if (!approval) throw new Error('apply-review requires --approval "<user approval>"');
+        result = await applyAgentsReviewPlan(root, plan, { approval, dryRun });
         break;
       }
       case "apply": {
         const planFile = flag(args, "plan-file");
-        const planText = flag(args, "plan") ?? (planFile ? await readFile3(resolve3(planFile), "utf8") : void 0);
+        const planText = flag(args, "plan") ?? (planFile ? await readFile5(resolve6(planFile), "utf8") : void 0);
         if (!planText) throw new Error("apply requires --plan <json> or --plan-file <path>");
         const plan = JSON.parse(planText);
         const mutate = () => applyMemoryPlan(root, plan, { dryRun });
@@ -10721,7 +12201,7 @@ ${HELP}`);
     return 1;
   }
 }
-var isMain = process.argv[1] && (["memory", "memory.mjs"].includes(basename3(process.argv[1])) || import.meta.url === pathToFileURL(resolve3(process.argv[1])).href);
+var isMain = process.argv[1] && (["memory", "memory.mjs"].includes(basename5(process.argv[1])) || import.meta.url === pathToFileURL(resolve6(process.argv[1])).href);
 if (isMain) process.exitCode = await runCli(process.argv.slice(2));
 export {
   formatToon,

@@ -20,6 +20,24 @@ npx github:Pankil02/AgentSkills update             # apply (old copies backed up
 
 ---
 
+## [2.1.0] — 2026-09-30
+
+### `project-memory` 2.1.0 (non-breaking, backward-compatible entry points & routing)
+- **Added**:
+  - Typed fact catalog `.memory/.meta/entrypoints.json` (schemaVersion 1) as single source of truth for repository shape, scopes, entry points, and verification commands.
+  - Task and path routing CLI command: `memory route [--task <t>] [--for-path <p>] [--limit <n>]` providing deepest matching scopes, start paths, and verification commands without deep scanning.
+  - Continuous synchronization of root `AGENTS.md` managed block (`<!-- memory:start -->` ... `<!-- memory:end -->`) and `.memory/index.md` with strict byte-budget compaction (< 4,000 bytes target, < 6,000 bytes hard limit).
+  - Human instruction review engine: `memory agents-sync --review` audits unmanaged human instructions, reporting marker issues, broken local links, and oversized files. `memory apply-review --plan-file <f> --approval <a>` applies exact byte-offset patches with base sha256 validation while strictly prohibiting edits to managed blocks.
+  - Entry-point quality evaluation and rubric: `memory validate --entrypoints --quality` scoring across orientation, scope ownership, task routing, verification, freshness, context economy, and semantic clarity (100-point rubric + binary safety gates).
+  - Support for generic repositories without forced DDD architecture via `architectureMode: "unconfirmed" | "ddd" | "other"`.
+- **Breaking**: no. Existing 0.3 bundles continue to function identically; entrypoints catalog is automatically created on next `sync`.
+- **Migration:** none. Run `memory sync` to generate the entry points catalog and refresh `AGENTS.md`.
+
+### `software-design-patterns` 2.0.0, `plan-walkthrough` 1.0.0
+- No change.
+
+---
+
 ## [2.0.0] — 2026-09-27
 
 ### `project-memory` 2.0.0 (breaking; bundle format 0.2 → 0.3)

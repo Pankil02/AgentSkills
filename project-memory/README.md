@@ -67,13 +67,16 @@ npx skills@latest add Pankil02/AgentSkills --skill project-memory
 | `memory log [--recent N --type t --since d --query q --all]` | Read the log, filtered |
 | `memory log --add --type t --title … --summary …` | Append one log entry |
 | `memory search <q>` | Ranked snippets across memory |
-| `memory sync [--check] [--fetch-remote]` | Refresh indexes/fingerprints, rotate logs (`--check` for CI) |
-| `memory validate [--strict] [--drift]` | Structure, links, budgets, drift |
+| `memory route [--task <t>] [--for-path <p>]` | Route to deepest scope, start paths, and test commands |
+| `memory sync [--check] [--fetch-remote]` | Refresh indexes, entrypoint catalog, rotate logs (`--check` for CI) |
+| `memory agents-sync [--review] [--check]` | Synchronize AGENTS.md managed block; audit human instructions |
+| `memory apply-review --plan-file <f> --approval <a>` | Apply approved edits to unmanaged human instructions |
+| `memory validate [--strict] [--drift] [--entrypoints] [--quality]` | Structure, links, budgets, catalog, drift |
 | `memory init` / `scaffold --scope p` | Create bundle / add scope |
 | `memory migrate [--dry-run]` | Upgrade 1.x bundles (archives goal/progress/tasks) |
 | `memory record --source <path\|url>` | Register an approved source |
 | `memory apply --plan-file f` | Atomic multi-document update |
-| `memory map` / `context` / `scan` / `agents-sync` | Code tree / injected context / scope candidates / AGENTS.md block |
+| `memory map` / `context` / `scan` | Code tree / injected context / scope candidates |
 
 Add `--json`, `--toon`, or `--dry-run` to any command. The CLI never commits to Git.
 

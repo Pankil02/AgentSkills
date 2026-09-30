@@ -1,6 +1,6 @@
 {
   "name": "project-memory",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Token-efficient project memory (conventions, decisions, log) for Pi, Kilo Code, and Google Antigravity agents",
   "type": "module",
   "license": "MIT",
@@ -38,6 +38,7 @@
     "install:kilo:link": "node scripts/install-kilo.mjs --link",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "benchmark:entrypoints": "tsx scripts/benchmark-entrypoints.ts",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

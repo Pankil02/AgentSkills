@@ -1,7 +1,7 @@
 ---
 name: project-memory
 description: Durable project memory in .memory/ that agents load on demand. Holds conventions, decisions, per-scope briefs, architecture flows, sources, and an append-only work log. Use when starting or resuming work in a repo with .memory/, before editing code (to check rules), before proposing a design (to check past decisions), after meaningful work (to log it), or when the user asks to remember, decide, or record something. Skip for trivial one-off edits.
-version: 2.0.0
+version: 2.1.0
 author: Pankil
 license: MIT
 tags:
@@ -74,14 +74,17 @@ tags:
 |---|---|
 | `memory status` | Scopes, decision counts, last 5 log entries, validation |
 | `memory check --for-path <p>` | Governing docs, holds, MUST/NEVER rules for a path |
+| `memory route [--task <t>] [--for-path <p>]` | Route to deepest scope, start paths, and test commands |
 | `memory decisions [--all]` | Decision list (accepted by default) |
 | `memory log [--recent N] [--type t] [--since d] [--query q] [--all]` | Filtered log entries, newest first |
 | `memory log --add …` | Append one entry |
 | `memory decide …` | Record decision (+ log entry, index refresh) |
 | `memory search <q>` | BM25 ranked snippets |
 | `memory apply --plan-file <f>` | Atomic multi-doc update (see `references/cli.md`) |
-| `memory sync` | Refresh indexes/fingerprints; archive previous months' logs |
-| `memory validate [--strict] [--drift]` | Structure, links, budgets, drift |
+| `memory sync` | Refresh indexes, entrypoint catalog, and fingerprints; archive previous months' logs |
+| `memory agents-sync [--review] [--check]` | Validate and sync AGENTS.md managed block; audit human instructions |
+| `memory apply-review --plan-file <f> --approval <a>` | Apply approved edits to unmanaged human instructions |
+| `memory validate [--strict] [--drift] [--entrypoints] [--quality]` | Structure, links, budgets, catalog, drift |
 | `memory init [--scope p]` / `scaffold` | Create bundle / add tracked scope |
 | `memory migrate [--dry-run]` | Upgrade 0.1/0.2 bundles (archives goal/progress/tasks) |
 | `memory record --source <path\|url>` | Register an approved source |
@@ -105,4 +108,6 @@ Add `--json` for machine output, `--toon` for compact agent output, and `--dry-r
 
 - `references/format.md`: document schemas and frontmatter fields.
 - `references/cli.md`: JSON contracts and plan operations.
+- `references/entrypoints.md`: entry-point architecture, fact catalog, and generic repositories.
+- `references/maintenance.md`: safe maintenance cycle, pre-images, and instruction review.
 - `references/upgrade.md`: migrating from 1.x (0.1/0.2 bundles).
