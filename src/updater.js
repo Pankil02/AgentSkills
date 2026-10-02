@@ -53,6 +53,11 @@ function scopesFor(scope) {
   return scope === 'project' || scope === 'global' ? [scope] : ['project', 'global'];
 }
 
+// Backward-compatible aliases for previously installed skill folder names
+const LEGACY_ALIASES = {
+  'feature-proposal': ['new-feature-planning-proposal']
+};
+
 /**
  * Finds every installed copy/symlink of this repository's skills across agent targets.
  * @param {{ repoRoot: string, scope?: 'project'|'global'|'all', cwd?: string, skills?: string[] }} options
@@ -67,34 +72,37 @@ export function findInstalledSkills({ repoRoot, scope = 'all', cwd = process.cwd
     for (const agent of AGENT_REGISTRY) {
       const destDir = resolveAgentDestination(agent, currentScope, cwd);
       for (const skill of available) {
-        const targetPath = path.join(destDir, skill.id);
-        const key = path.resolve(targetPath);
-        if (seen.has(key)) continue;
+        const candidateNames = [skill.id, ...(LEGACY_ALIASES[skill.id] || [])];
+        for (const candidateName of candidateNames) {
+          const targetPath = path.join(destDir, candidateName);
+          const key = path.resolve(targetPath);
+          if (seen.has(key)) continue;
 
-        let stat;
-        try { stat = fs.lstatSync(targetPath); } catch { continue; }
-        seen.add(key);
+          let stat;
+          try { stat = fs.lstatSync(targetPath); } catch { continue; }
+          seen.add(key);
 
-        // Never treat the repository's own source directory as an install.
-        if (path.resolve(targetPath) === path.resolve(skill.skillDir)) continue;
+          // Never treat the repository's own source directory as an install.
+          if (path.resolve(targetPath) === path.resolve(skill.skillDir)) continue;
 
-        const isSymlink = stat.isSymbolicLink();
-        let linkTarget = null;
-        if (isSymlink) {
-          try { linkTarget = path.resolve(path.dirname(targetPath), fs.readlinkSync(targetPath)); } catch { /* broken */ }
+          const isSymlink = stat.isSymbolicLink();
+          let linkTarget = null;
+          if (isSymlink) {
+            try { linkTarget = path.resolve(path.dirname(targetPath), fs.readlinkSync(targetPath)); } catch { /* broken */ }
+          }
+          const installed = fs.existsSync(targetPath) ? parseSkillDirectory(targetPath) : null;
+
+          found.push({
+            skill,
+            agent,
+            scope: currentScope,
+            destDir,
+            targetPath,
+            mode: isSymlink ? 'symlink' : 'copy',
+            linkTarget,
+            installedVersion: installed?.version ?? null
+          });
         }
-        const installed = fs.existsSync(targetPath) ? parseSkillDirectory(targetPath) : null;
-
-        found.push({
-          skill,
-          agent,
-          scope: currentScope,
-          destDir,
-          targetPath,
-          mode: isSymlink ? 'symlink' : 'copy',
-          linkTarget,
-          installedVersion: installed?.version ?? null
-        });
       }
     }
   }

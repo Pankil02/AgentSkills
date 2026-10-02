@@ -255,10 +255,16 @@ export async function executeInstall(options) {
   const discovered = discoverSkills(repoRoot);
   const discoveredMap = new Map(discovered.map(s => [s.id.toLowerCase(), s]));
 
+  // Backward-compatible aliases for renamed skills
+  const SKILL_ALIASES = {
+    'new-feature-planning-proposal': 'feature-proposal'
+  };
+
   // Parse comma-separated or space-separated skills
   const normalizedRequested = (Array.isArray(skills) ? skills : [skills])
     .flatMap(s => typeof s === 'string' ? s.split(',') : s)
     .map(s => typeof s === 'string' ? s.trim().toLowerCase() : s)
+    .map(s => SKILL_ALIASES[s] || s)
     .filter(Boolean);
 
   const isAll = normalizedRequested.length === 0 ||

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { AGENT_REGISTRY, getAgent, resolveAgentDestination } from '../src/agents.js';
 import { discoverSkills, SkillFrontmatterSchema, extractFrontmatter } from '../src/discovery.js';
@@ -244,6 +245,84 @@ describe('AgentSkills Enterprise Suite', () => {
         const link = fs.readlinkSync(res.targetPath);
         assert.ok(!path.isAbsolute(link), `Expected relative link, got: ${link}`);
       }
+    });
+
+    it('should install feature-proposal copying scripts and templates without data loss', async () => {
+      const cwd = path.join(tempDir, 'feature-proposal-install');
+      fs.mkdirSync(cwd, { recursive: true });
+      // Place existing proposal in project
+      const proposalDir = path.join(cwd, 'docs', 'proposals', '2026-10-01-test');
+      fs.mkdirSync(proposalDir, { recursive: true });
+      fs.writeFileSync(path.join(proposalDir, 'proposal.md'), '# Existing Proposal');
+
+      await executeInstall({
+        repoRoot: REPO_ROOT,
+        skills: ['feature-proposal'],
+        targets: ['universal'],
+        scope: 'project',
+        method: 'copy',
+        cwd
+      });
+
+      const installed = path.join(cwd, '.agents', 'skills', 'feature-proposal');
+      assert.ok(fs.existsSync(path.join(installed, 'SKILL.md')));
+      assert.ok(fs.existsSync(path.join(installed, 'scripts', 'proposal.mjs')));
+      assert.ok(fs.existsSync(path.join(installed, 'templates', 'viewer', 'index.html')));
+
+      // Proposal data remained byte identical
+      assert.equal(fs.readFileSync(path.join(proposalDir, 'proposal.md'), 'utf8'), '# Existing Proposal');
+    });
+
+    it('should support legacy skill name alias new-feature-planning-proposal', async () => {
+      const cwd = path.join(tempDir, 'feature-proposal-alias');
+      fs.mkdirSync(cwd, { recursive: true });
+
+      await executeInstall({
+        repoRoot: REPO_ROOT,
+        skills: ['new-feature-planning-proposal'],
+        targets: ['universal'],
+        scope: 'project',
+        method: 'copy',
+        cwd
+      });
+
+      const installed = path.join(cwd, '.agents', 'skills', 'feature-proposal');
+      assert.ok(fs.existsSync(path.join(installed, 'SKILL.md')));
+    });
+
+    it('should execute standalone copied feature-proposal scripts outside repository without node_modules', async () => {
+      const cwd = path.join(tempDir, 'feature-proposal-standalone');
+      fs.mkdirSync(cwd, { recursive: true });
+
+      await executeInstall({
+        repoRoot: REPO_ROOT,
+        skills: ['feature-proposal'],
+        targets: ['universal'],
+        scope: 'project',
+        method: 'copy',
+        cwd
+      });
+
+      const installed = path.join(cwd, '.agents', 'skills', 'feature-proposal');
+      assert.ok(fs.existsSync(path.join(installed, 'SKILL.md')));
+      assert.equal(fs.existsSync(path.join(cwd, 'node_modules')), false);
+      assert.equal(fs.existsSync(path.join(installed, 'node_modules')), false);
+
+      const fixtureSrc = path.join(REPO_ROOT, 'tests', 'fixtures', 'feature-proposal');
+      const fixtureDest = path.join(cwd, 'docs', 'proposals', 'test-fixture');
+      fs.cpSync(fixtureSrc, fixtureDest, { recursive: true });
+
+      const scriptPath = path.join(installed, 'scripts', 'proposal.mjs');
+      const runNode = fs.existsSync('/opt/homebrew/bin/node') ? '/opt/homebrew/bin/node' : process.execPath;
+      const res = spawnSync(runNode, [scriptPath, 'check', '--plan', path.join(fixtureDest, 'proposal.md'), '--json'], {
+        cwd,
+        encoding: 'utf8'
+      });
+
+      assert.equal(res.status, 0, `Execution failed: ${res.stderr}`);
+      const output = JSON.parse(res.stdout);
+      assert.equal(output.valid, true);
+      assert.equal(output.schemaVersion, 1);
     });
   });
 

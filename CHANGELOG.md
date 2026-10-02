@@ -18,6 +18,145 @@ npx github:Pankil02/AgentSkills update             # apply (old copies backed up
 - `skills.sh` users: `npx skills@latest update`.
 - After updating, apply any **Migration** steps listed below for versions between your old and new version.
 
+## [3.0.0] — 2026-10-02
+
+### `feature-proposal` 2.0.0 (token-free localhost viewer, prompt quality gates & quantitative rubric, BREAKING)
+- **Token-Free Localhost Presentation (Breaking)**:
+  - Eliminated per-session capability tokens, `#token=...` URL fragments, and `Authorization: Bearer <token>` headers from the local HTTP viewer.
+  - Server binds strictly to IPv4 `127.0.0.1` and displays a clean, direct loopback URL: `http://127.0.0.1:<port>/`.
+  - Reloading, bookmarking, and opening multiple browser tabs no longer require passing or restoring authentication tokens.
+- **API Contract Updates (Breaking for Custom API Integrations)**:
+  - `/api/proposal`, `/api/tabs/:id`, and `/api/source/:id` endpoints require zero authentication tokens or headers.
+  - Host authority (`127.0.0.1:<port>`), Origin matching, fetch-metadata (`Sec-Fetch-Site`), and filesystem traversal boundaries remain strictly enforced.
+  - `startViewer()` programmatic interface no longer returns or accepts `token`.
+- **Enforced Agent Rules & Quality Gates (Breaking for Agent Generation Contract)**:
+  - **Intake Discipline**: Strict limit of ≤3 blocking questions; non-blocking unknowns must be recorded as explicit labeled assumptions (`ASM-01`, `ASM-02`).
+  - **Evidence-First Contract**: Code inspection must cite exact `path:line` or `symbol` references; metrics must be explicitly tagged as `observed`, `target`, `estimate`, or `assumption`.
+  - **Quantitative System Design Rubric**: Enforces explicit workload mathematics (peak QPS, Little's Law concurrency, payload wire/compressed bytes, connection occupancy) and specialist coverage across database, compute, latency percentiles (p50/p95/p99), and object storage.
+  - **Zero Unsupported Guarantees**: Prohibits speculative claims ("infinitely scalable", "zero downtime", "100% secure") and canned microservice architectures without measured workload justification.
+  - **Justified N/A**: Non-applicable dimensions (e.g., no DB for local client UI) must document an explicit technical rationale and a revisit trigger.
+- **Robustness, Navigation & Accessibility**:
+  - Single-flight refresh coordination with two-version snapshot retention (current and previous last-good).
+  - Structured diagnostics envelope for syntax, manifest, or compile errors without dropping active viewer sessions.
+  - Full WAI-ARIA tabstrip compliance with manual arrow-key roving tabindex, Home/End jump keys, Enter/Space activation, real tabpanels, skip navigation, and accessible SVG alternative data tables.
+- **Data & Schema Compatibility**:
+  - Existing proposal bundles remain `schemaVersion: 1` and require zero data conversion or manual edits.
+- **Migration**:
+  1. Preview updates across agents and scopes:
+     ```bash
+     npx github:Pankil02/AgentSkills update --dry-run
+     ```
+  2. Apply the update:
+     ```bash
+     npx github:Pankil02/AgentSkills update
+     ```
+  3. Stop any currently running viewer process and restart it:
+     ```bash
+     node <skill>/scripts/proposal.mjs view --plan docs/proposals/YYYY-MM-DD-<slug>/proposal.md
+     ```
+  4. Open the plain loopback URL (e.g., `http://127.0.0.1:4317/`).
+  5. If you have custom scripts or tools calling `/api/proposal` or `/api/tabs/:id`, remove the `Authorization` header.
+  6. Existing proposal files and directories require no migration.
+
+---
+
+## [2.6.0] — 2026-10-02
+
+### `feature-proposal` 1.4.0 (system design architecture SVG icons, non-breaking)
+- **Authentic System Design Architecture Icons**:
+  - Replaced plain emojis with a full vector SVG catalog of 20+ specialized system architecture and cloud design icons:
+    - **`cdn`**: Global content delivery network with edge server nodes and signal broadcast links.
+    - **`database` / `sql`**: Multi-tiered disk cylinder database with platter rims and query indicators.
+    - **`redis` / `cache`**: Isometric stacked in-memory cache plates with indicator markers.
+    - **`browser` / `frontend`**: Browser window with top window controls and web globe.
+    - **`app-server` / `compute`**: Microprocessor / CPU processor chip with circuit core and bus connection pins.
+    - **`server` / `web-server`**: Dual-chassis server rack with drive bays, status LEDs, and interconnects.
+    - **`load-balancer`**: Traffic distributor node branching cleanly into balanced outputs.
+    - **`api-gateway`**: Ingress/egress gateway portal with crossing routing paths.
+    - **`queue` / `kafka`**: Pipeline message buffer with in-flight packet cards and flow direction.
+    - **`external` / `third-party`**: API integration gear with central core.
+    - **`storage` / `s3`**: Object storage bucket with handle and data wave.
+    - **`auth`**: Security shield with padlock.
+    - **`worker` / `cron`**: Periodic timer with circular cycle arrows.
+    - **`search` / `elasticsearch`**: Search lens with index sparkle.
+    - **`metrics`**: Telemetry monitor with heartbeat/pulse ECG wave.
+    - **`notification` / `email`**: Sealed envelope with dispatch fold.
+    - **`container` / `docker`**: 3D modular container cube.
+    - **`state` / `workflow`**: State machine transition nodes.
+    - **`user` / `actor`**: User persona avatar.
+    - **`network` / `dns`**: Routing globe with equatorial network rings.
+- **Node Card Layout & Design**:
+  - Upgraded node cards to 236x74px with rounded corners (`rx: 6, ry: 6`) and a dedicated 46x46px tinted icon tile badge on the left (`rx: 8, ry: 8`).
+  - Added 28x28px tinted icon badges to sequence diagram participant boxes.
+  - Implemented automatic, intelligent icon inference from node labels, IDs, details, and roles (e.g., PostgreSQL → database, Redis → cache, Cloudflare → cdn, Nginx → load-balancer, Web Client → browser).
+  - Added support for explicit `"icon"` attribute on graph nodes and sequence participants in `diagram-json`.
+  - Upgraded hover states with subtle elevation filter and tile brightness shift.
+  - Enhanced accessible alternative text table with an icon identifier column.
+- **Migration:** Run `npx github:Pankil02/AgentSkills update`. Fully backward compatible; existing diagrams automatically receive matched system design icons without manual edits.
+
+---
+
+## [2.5.0] — 2026-10-02
+
+### `feature-proposal` 1.3.0 (visual icon badges, animated live indicators & callout typography, non-breaking)
+- **Visual Icon System**:
+  - Added role emoji icons (`👤 ACTOR`, `⚙️ SERVICE`, `🗄️ STORE`, `📨 QUEUE`, `🌐 EXTERNAL`, `🔄 STATE`) with dynamic badge width scaling and precise SVG typography.
+  - Added participant icon resolution for sequence diagrams based on name and role heuristics.
+  - Added animated pulsing live status indicator (`.brand-badge` with `.badge-dot` keyframe animation).
+  - Enhanced tab strip buttons with icon hover scaling (`.tab-icon` 1.18x hover / 1.1x selected).
+- **Rich Callouts, Verdicts & Badges**:
+  - Implemented `.badge-verdict-chosen`, `.badge-verdict-rejected`, and `.badge-recommended` with icon glyphs and tailored color tokens.
+  - Added impact level badges (`.badge-level-high`, `.badge-level-med`, `.badge-level-low`) and heading icons (`.heading-icon`).
+  - Upgraded callouts with structured headers (`.callout-header`, `.callout-icon`) and distinct left border accents.
+  - Added custom accordion caret indicators with open-state rotation and task-list checkbox styling.
+- **Migration:** Run `npx github:Pankil02/AgentSkills update`. No schema changes required; all proposals remain 100% backward compatible.
+
+---
+
+## [2.4.0] — 2026-10-01
+
+### `feature-proposal` 1.2.0 (lightweight fixed diagrams & auto-layout, non-breaking)
+- **Fixed & Lightweight Presentation**:
+  - Eliminated the movable/draggable canvas, dotted grid background (`radial-gradient`), pan-and-zoom state, and toolbar zoom buttons (`Fit`, `−`, `+`, `Reset`).
+  - Diagram is now rendered as a clean, static, high-contrast SVG directly in the document flow with natural height and native smooth horizontal scrolling (`overflow-x: auto`) for smaller viewports.
+  - Added "Copy SVG" action in the diagram toolbar for instant raw SVG clipboard export.
+  - Increased card dimensions (224x68px), line weights (1.75px), and font sizes (13px titles, 10px details, 8px badges) for superior readability and prominent visual impact.
+  - Collapsed the accessible data table alternative by default so diagrams remain light and uncluttered.
+- **Agent Authoring Consistency**:
+  - `lane` (0–4) and `order` (0–3) are now optional in `diagram-json`. When omitted, the deterministic layout engine automatically assigns topological column ranks and row stages.
+  - `role` defaults to `"service"` and `kind` defaults to `"sync"` when unspecified.
+  - Automatic column compression removes phantom whitespace gaps when non-contiguous lanes are authored.
+  - Orthogonal circuit-style routing eliminates diagonal crossing collisions.
+- **Migration:** Run `npx github:Pankil02/AgentSkills update`. No schema migration needed; all existing proposals remain 100% backward compatible.
+
+---
+
+## [2.3.0] — 2026-10-01
+
+### `feature-proposal` 1.1.0 (renamed from `new-feature-planning-proposal`, non-breaking)
+- **Renamed Skill**: `new-feature-planning-proposal` is now concisely named `feature-proposal`.
+- **Collapsible UI Arrow Indicators**: Added animated chevron up-down indicator for all collapsible and expandable sections (`<details>`, `.accordion`, and diagram text alternative tables).
+- **Diagram Layering & Text Visibility**:
+  - Re-architected graph diagrams into strict SVG painting layers (`layer-edges` at base, `layer-nodes` in middle, `layer-labels` on top) so text and background pills never hide under node cards or line paths.
+  - Implemented dynamic node card sizing (`CARD_WIDTH`), generous lane spacing (`LANE_WIDTH`, `CARD_GAP`), and vertical row heights (`ROW_HEIGHT`) derived from longest labels to eliminate label clipping.
+  - Added orthogonal cross-row stepped routing that connects to card top/bottom faces, avoiding line and label collisions with in-row edges.
+  - Added dynamic participant box widths and message label pill backgrounds in sequence diagrams.
+- **Backward Compatibility**: `AgentSkills` installer and updater automatically resolve legacy alias `new-feature-planning-proposal` to `feature-proposal`.
+- **Migration:** Run `npx github:Pankil02/AgentSkills update` to update existing installs in-place, or install freshly via `npx github:Pankil02/AgentSkills install feature-proposal`.
+
+---
+
+## [2.2.0] — 2026-10-01
+
+### `new-feature-planning-proposal` 1.0.0 (new skill, non-breaking)
+- Added evidence-based feature proposals with explicit alternatives, workload budgets and relevant enterprise edge cases.
+- Added a dependency-free loopback browser viewer with small tabs, native diagrams and exact Markdown source.
+- Proposals remain editable Markdown bundles outside installed skill directories; JSON is derived, not a second source.
+- **Migration:** none.
+
+### `project-memory` 2.1.0, `software-design-patterns` 2.0.0, `plan-walkthrough` 1.0.0
+- No change.
+
 ---
 
 ## [2.1.0] — 2026-09-30

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Feature Proposal Viewer - Minimal Boxy Preview">
+  <title>Proposal Viewer</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body class="prism-theme">
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <div class="app-shell">
+    <header class="app-header" role="banner">
+      <div class="header-topbar">
+        <div class="brand-group">
+          <svg class="brand-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+          <h1 id="proposal-title" class="brand-title">Proposal Viewer</h1>
+          <span class="brand-badge"><span class="badge-dot"></span> <span id="status-indicator">Refresh from disk</span></span>
+        </div>
+        <div class="header-actions">
+          <button id="btn-theme-toggle" class="btn btn-secondary btn-sm" title="Toggle Theme (Key: T)" aria-label="Toggle dark/light theme">
+            <span class="btn-icon" aria-hidden="true">🌓</span>
+            <span class="btn-label">Theme</span>
+          </button>
+          <button id="btn-refresh" class="btn btn-primary btn-sm" title="Refresh proposal from disk (Key: R)" aria-label="Refresh proposal from disk">
+            <span class="btn-icon-glyph spin-target" aria-hidden="true">🔄</span>
+            <span class="btn-label">Refresh</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <nav class="nav-container" aria-label="Proposal Tabs">
+      <div class="tablist" role="tablist">
+        <button id="tab-overview" class="tab-btn" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">
+          <span class="tab-icon" aria-hidden="true">📋</span>
+          <span class="tab-text">Overview</span>
+        </button>
+        <button id="tab-requirements" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-requirements" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">🎯</span>
+          <span class="tab-text">Requirements</span>
+        </button>
+        <button id="tab-options" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-options" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">⚖️</span>
+          <span class="tab-text">Options</span>
+        </button>
+        <button id="tab-architecture" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-architecture" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">🏛️</span>
+          <span class="tab-text">Architecture</span>
+        </button>
+        <button id="tab-data-api" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-data-api" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">🗄️</span>
+          <span class="tab-text">Data &amp; API</span>
+        </button>
+        <button id="tab-performance" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-performance" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">⚡</span>
+          <span class="tab-text">Performance</span>
+        </button>
+        <button id="tab-risks" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-risks" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">🛡️</span>
+          <span class="tab-text">Risks</span>
+        </button>
+        <button id="tab-delivery" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-delivery" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">🚀</span>
+          <span class="tab-text">Delivery</span>
+        </button>
+        <button id="tab-source" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-source" tabindex="-1">
+          <span class="tab-icon" aria-hidden="true">💻</span>
+          <span class="tab-text">Source</span>
+        </button>
+      </div>
+    </nav>
+
+    <div id="outline-sidebar" class="outline-bar" aria-label="Table of Contents">
+      <div class="outline-header">
+        <span class="outline-bullet" aria-hidden="true">🧭</span>
+        <span class="outline-title">On this page:</span>
+      </div>
+      <nav id="outline-nav" class="outline-nav"></nav>
+    </div>
+
+    <main id="main-content" class="main-content" role="main">
+      <div class="landmarks-registry" aria-hidden="true">
+        <div id="overview" class="landmark-target" role="region" aria-label="Overview landmark"></div>
+        <div id="requirements" class="landmark-target" role="region" aria-label="Requirements landmark"></div>
+        <div id="options" class="landmark-target" role="region" aria-label="Options landmark"></div>
+        <div id="architecture" class="landmark-target" role="region" aria-label="Architecture landmark"></div>
+        <div id="data-api" class="landmark-target" role="region" aria-label="Data and API landmark"></div>
+        <div id="performance" class="landmark-target" role="region" aria-label="Performance landmark"></div>
+        <div id="risks" class="landmark-target" role="region" aria-label="Risks landmark"></div>
+        <div id="delivery" class="landmark-target" role="region" aria-label="Delivery landmark"></div>
+        <div id="source" class="landmark-target" role="region" aria-label="Source landmark"></div>
+      </div>
+
+      <!-- Persistent Diagnostic Banner -->
+      <div id="diagnostic-banner" class="banner banner-diagnostic" role="alert" hidden></div>
+
+      <div class="content-columns">
+        <section id="panel-overview" class="panel-container" role="tabpanel" aria-labelledby="tab-overview">
+          <div id="loading-indicator" class="loading-state">
+            <span class="loader-pulse"></span>
+            <span>Loading proposal content...</span>
+          </div>
+        </section>
+        <section id="panel-requirements" class="panel-container" role="tabpanel" aria-labelledby="tab-requirements" hidden></section>
+        <section id="panel-options" class="panel-container" role="tabpanel" aria-labelledby="tab-options" hidden></section>
+        <section id="panel-architecture" class="panel-container" role="tabpanel" aria-labelledby="tab-architecture" hidden></section>
+        <section id="panel-data-api" class="panel-container" role="tabpanel" aria-labelledby="tab-data-api" hidden></section>
+        <section id="panel-performance" class="panel-container" role="tabpanel" aria-labelledby="tab-performance" hidden></section>
+        <section id="panel-risks" class="panel-container" role="tabpanel" aria-labelledby="tab-risks" hidden></section>
+        <section id="panel-delivery" class="panel-container" role="tabpanel" aria-labelledby="tab-delivery" hidden></section>
+        <section id="panel-source" class="panel-container" role="tabpanel" aria-labelledby="tab-source" hidden>
+          <div class="source-toolbar">
+            <div class="source-select-group">
+              <label for="source-doc-select" class="field-label">Document:</label>
+              <select id="source-doc-select" class="source-select"></select>
+            </div>
+            <div class="source-actions">
+              <button id="btn-copy-source" class="btn btn-secondary btn-sm"><span class="btn-icon" aria-hidden="true">📋</span> Copy Source</button>
+            </div>
+          </div>
+          <div class="source-viewer-wrapper">
+            <div class="source-code-header">
+              <span id="source-filename" class="source-filename">proposal.md</span>
+            </div>
+            <pre class="source-pre"><code id="source-code-view" class="source-code"></code></pre>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <div id="app-toast" class="app-toast" role="status" aria-live="polite" hidden></div>
+
+    <footer class="app-footer" role="contentinfo">
+      <div class="footer-left">
+        <span id="footer-version" class="footer-meta">⚡ PROPOSAL VIEWER · 127.0.0.1</span>
+      </div>
+      <div class="footer-right">
+        <span class="footer-hint">🔒 Local Isolated Preview</span>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>

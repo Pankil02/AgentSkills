@@ -49,8 +49,16 @@ AgentSkills/
 ├── plan-walkthrough/               # Skill: deep plan → docs/plans/ + walkthrough + handoff prompt
 │   ├── SKILL.md                    # Investigate → decide → write plan → reply contract
 │   └── README.md                   # User-facing overview
+├── feature-proposal/               # Skill: low-overhead feature proposals + local browser viewer
+│   ├── SKILL.md                    # Planning/viewing agent contract v2.0.0
+│   ├── README.md / AGENTS.md       # User docs, maintenance contract
+│   ├── references/                 # planning, format, viewer
+│   ├── scripts/                    # Standalone native CLI & loopback server (proposal, files, format, server)
+│   └── templates/                  # Manifest, 8 section templates, reusable viewer assets
 ├── tests/
-│   └── cli.test.js                 # Automated unit & integration test suite (node:test)
+│   ├── cli.test.js                 # Automated CLI integration test suite (node:test)
+│   ├── feature-proposal.test.js    # Feature proposal parser, safety, and server test suite
+│   └── fixtures/feature-proposal/  # Realistic test proposal bundle
 └── .github/
     └── workflows/
         └── ci.yml                  # GitHub Actions CI matrix (Ubuntu, macOS, Windows)
@@ -189,3 +197,7 @@ node bin/cli.js install all --scope project --symlink --yes
 ### `plan-walkthrough`
 - **Goal**: Produce a deep, latency-aware implementation plan without touching code, then hand off to a fresh agent.
 - **Primary Agent Command**: Investigate real code first; for each decision record chosen vs rejected (flaw) and why; save plan to `docs/plans/YYYY-MM-DD-<slug>.md`; reply with a ≤40-line walkthrough (design, decisions, code structure, files, latency/risks), the plan path, and a copy-paste handoff prompt.
+
+### `feature-proposal`
+- **Goal**: Produce evidence-based, workload-aware feature proposals adhering to quantitative system design rubrics, documenting enterprise failure cases, and presenting through a dependency-free token-free local loopback browser viewer.
+- **Primary Agent Command**: Plan only, never implement. Ask ≤3 sharp questions (or label assumptions); inspect active code with exact citations; compare baseline vs stress workloads; author `proposal.md` + 8 sections under `docs/proposals/YYYY-MM-DD-<slug>/`. Validate with `node <skill>/scripts/proposal.mjs check --plan <path>`. View locally with `node <skill>/scripts/proposal.mjs view --plan <path>`. Reply with ≤40-line walkthrough and fresh-chat handoff prompt.

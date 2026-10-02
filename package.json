@@ -1,6 +1,6 @@
 {
   "name": "@pankil/agent-skills",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Enterprise-grade CLI and curated skills ecosystem for AI coding agents (Antigravity, Cursor, Claude Code, Pi, Gemini, Codex)",
   "type": "module",
   "main": "src/index.js",
@@ -15,6 +15,7 @@
     "project-memory",
     "software-design-patterns",
     "plan-walkthrough",
+    "feature-proposal",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -25,7 +26,7 @@
     "doctor": "node bin/cli.js doctor",
     "validate": "node bin/cli.js validate",
     "list": "node bin/cli.js list",
-    "test": "node --test tests/cli.test.js"
+    "test": "bun test tests/cli.test.js tests/feature-proposal.test.js"
   },
   "repository": {
     "type": "git",
@@ -44,6 +45,8 @@
     "project-memory",
     "software-design-patterns",
     "plan-walkthrough",
+    "new-feature-planning-proposal",
+    "feature-proposal",
     "developer-tools"
   ],
   "author": "Pankil",
