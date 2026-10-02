@@ -26,13 +26,13 @@ function createSvgElement(tag, attrs = {}) {
  */
 function getRoleBadgeColor(role) {
   switch (role) {
-    case 'actor': return '#7A5B7E';
-    case 'service': return '#51679F';
+    case 'actor': return '#3f3026';
+    case 'service': return '#15018d';
     case 'store': return '#28766F';
-    case 'queue': return '#9B6A22';
-    case 'external': return '#B65368';
-    case 'state': return '#4F7658';
-    default: return '#51679F';
+    case 'queue': return '#e55a08';
+    case 'external': return '#c96a4a';
+    case 'state': return '#3b7346';
+    default: return '#15018d';
   }
 }
 
@@ -261,11 +261,11 @@ function truncateText(str, maxLen) {
 
 function getEdgeColor(kind) {
   switch (kind) {
-    case 'failure': return '#B65368';
-    case 'data': return '#51679F';
-    case 'async': return '#9B6A22';
+    case 'failure': return '#c94a4a';
+    case 'data': return '#15018d';
+    case 'async': return '#e55a08';
     case 'sync': return '#28766F';
-    default: return '#817B89';
+    default: return '#707070';
   }
 }
 
@@ -453,10 +453,10 @@ function renderGraphSvg(graph) {
   const defs = createSvgElement('defs');
   appendArrowMarkers(defs, `arrow-${graph.id}`, [
     { id: 'sync', color: '#28766F' },
-    { id: 'data', color: '#51679F' },
-    { id: 'async', color: '#9B6A22' },
-    { id: 'failure', color: '#B65368' },
-    { id: 'default', color: '#817B89' }
+    { id: 'data', color: '#15018d' },
+    { id: 'async', color: '#e55a08' },
+    { id: 'failure', color: '#c94a4a' },
+    { id: 'default', color: '#707070' }
   ], 7);
   svg.appendChild(defs);
 
@@ -687,10 +687,10 @@ function renderSequenceSvg(seq) {
 
   const defs = createSvgElement('defs');
   appendArrowMarkers(defs, `seq-arr-${seq.id}`, [
-    { id: 'req', color: '#51679F' },
+    { id: 'req', color: '#15018d' },
     { id: 'res', color: '#28766F' },
-    { id: 'async', color: '#9B6A22' },
-    { id: 'fail', color: '#B65368' }
+    { id: 'async', color: '#e55a08' },
+    { id: 'fail', color: '#c94a4a' }
   ], 6);
   svg.appendChild(defs);
 
