@@ -1,6 +1,6 @@
 {
   "name": "@pankil/agent-skills",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Enterprise-grade CLI and curated skills ecosystem for AI coding agents (Antigravity, Cursor, Claude Code, Pi, Gemini, Codex)",
   "type": "module",
   "main": "src/index.js",

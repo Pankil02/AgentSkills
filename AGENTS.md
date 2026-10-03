@@ -46,7 +46,7 @@ AgentSkills/
 │   ├── SKILL.md                    # Enforced rules, router table, red flags (~90 lines)
 │   ├── README.md                   # User-facing overview
 │   └── references/                 # solid, creational, structural, behavioral, decisions, architecture
-├── plan-walkthrough/               # Skill: deep plan → docs/plans/ + walkthrough + handoff prompt
+├── plan-walkthrough/               # Skill: phased plan → docs/plans/ + walkthrough + one-phase chat handoffs
 │   ├── SKILL.md                    # Investigate → decide → write plan → reply contract
 │   └── README.md                   # User-facing overview
 ├── feature-proposal/               # Skill: low-overhead feature proposals + local browser viewer
@@ -195,8 +195,8 @@ node bin/cli.js install all --scope project --symlink --yes
 - **Primary Agent Command**: Apply SOLID to all touched code; match the code symptom in the `SKILL.md` router; try the baseline (function/map/enum/composition) first; load only the one `references/<category>.md` needed; flag missing and unearned patterns in review.
 
 ### `plan-walkthrough`
-- **Goal**: Produce a deep, latency-aware implementation plan without touching code, then hand off to a fresh agent.
-- **Primary Agent Command**: Investigate real code first; for each decision record chosen vs rejected (flaw) and why; save plan to `docs/plans/YYYY-MM-DD-<slug>.md`; reply with a ≤40-line walkthrough (design, decisions, code structure, files, latency/risks), the plan path, and a copy-paste handoff prompt.
+- **Goal**: Produce a deep, latency-aware phased plan without touching code; implement one phase per fresh chat to bound context usage.
+- **Primary Agent Command**: Investigate real code; record chosen vs rejected decisions; define dependency-ordered phases with scope, steps, verification, and acceptance criteria; save to `docs/plans/YYYY-MM-DD-<slug>.md`. Reply with a ≤40-line walkthrough and a phase-1-only prompt. Each implementing chat updates durable completion records and returns context plus a next-phase-only prompt repeating the same execution/handoff rules; blockers resume the same phase, and the final phase returns final verification.
 
 ### `feature-proposal`
 - **Goal**: Produce evidence-based, workload-aware feature proposals adhering to quantitative system design rubrics, documenting enterprise failure cases, and presenting through a dependency-free token-free local loopback browser viewer.

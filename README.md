@@ -106,7 +106,7 @@ Options:
 | :--- | :--- | :--- |
 | [**`project-memory`**](./project-memory) | Durable project memory in `.memory/`: conventions, decisions, scope briefs, architecture flows, fact-catalog-driven entry points (`AGENTS.md` + `index.md`), task routing, and a filtered work log. | Antigravity, Claude Code, Cursor, Pi, Codex, Gemini |
 | [**`software-design-patterns`**](./software-design-patterns) | Minimal, token-efficient SOLID + design-pattern router (all 23 GoF + DDD/architecture/resilience) that makes agents apply the right pattern per use case, without overengineering. | All AI Coding Agents |
-| [**`plan-walkthrough`**](./plan-walkthrough) | Deep, latency-aware implementation plan saved to `docs/plans/`, plus a short decision walkthrough and a copy-paste handoff prompt for a fresh implementing agent. | All AI Coding Agents |
+| [**`plan-walkthrough`**](./plan-walkthrough) | Deep, phased implementation plan saved to `docs/plans/`, plus a short decision walkthrough and chained fresh-chat prompts: one phase per chat, with durable completion context. | All AI Coding Agents |
 | [**`feature-proposal`**](./feature-proposal) | Evidence-based, workload-aware feature proposals with quantitative system design rubrics, enterprise failure cases, and a dependency-free token-free loopback browser viewer with authentic system architecture SVG diagrams (`node <skill>/scripts/proposal.mjs view --plan <path>`). Markdown remains authoritative; viewer is read-only. | All AI Coding Agents |
 
 ---

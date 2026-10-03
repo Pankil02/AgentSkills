@@ -18,6 +18,15 @@ npx github:Pankil02/AgentSkills update             # apply (old copies backed up
 - `skills.sh` users: `npx skills@latest update`.
 - After updating, apply any **Migration** steps listed below for versions between your old and new version.
 
+## [3.1.0] — 2026-10-03
+
+### `plan-walkthrough` 2.0.0 (phased implementation and chained fresh-chat handoffs, BREAKING)
+- Plans now require context-bounded, dependency-ordered phases with explicit scope, checkbox steps, verification commands, and acceptance criteria.
+- The initial handoff authorizes only phase 1. Each implementing chat records durable completion context and returns a prompt authorizing only the next phase, repeating the same execution and handoff rules.
+- Blocked phases return a same-phase resume prompt; the final phase returns verification and remaining risks without a next-phase prompt.
+- **Breaking:** changes the agent execution contract from implementing the entire plan in one chat to one phase per chat. CLI behavior and file layout are unchanged.
+- **Migration:** no file or data migration. Existing plans are not rewritten; re-plan them into phases before using the new workflow. Update installed skills with `npx github:Pankil02/AgentSkills update --dry-run` then `npx github:Pankil02/AgentSkills update`.
+
 ## [3.0.0] — 2026-10-02
 
 ### `feature-proposal` 2.0.0 (token-free localhost viewer, prompt quality gates & quantitative rubric, BREAKING)
